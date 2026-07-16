@@ -5,3 +5,4 @@ rectpack
 matplotlib
 numpy
 lxml
+
