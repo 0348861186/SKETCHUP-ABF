@@ -1,0 +1,7 @@
+Plaintext
+streamlit
+ezdxf
+rectpack
+matplotlib
+numpy
+lxml
