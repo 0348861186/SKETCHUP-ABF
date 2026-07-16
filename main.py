@@ -144,7 +144,7 @@ def process_cad_file_with_occ(file_bytes, filename):
             temp_path = temp_file.name
 
         # Đọc STEP
-        part = cq.importer.importStep(temp_path)
+        part = cq.importers.importStep(temp_path)
         all_faces = part.faces().vals()
 
         if not all_faces:
