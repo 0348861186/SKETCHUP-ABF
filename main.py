@@ -103,9 +103,6 @@ total_offset = (tool_diameter + safety_spacing) / 2.0
 # 4. HÀM SỬA GEOMETRY
 # ============================================================
 def repair_geometry(geometry):
-    """
-    Sửa Polygon lỗi nếu có.
-    """
     if geometry is None:
         return geometry
 
@@ -130,10 +127,6 @@ def repair_geometry(geometry):
 # 5. ĐỌC FILE STEP
 # ============================================================
 def process_cad_file_with_occ(file_bytes, filename):
-    """
-    Đọc file STEP bằng CadQuery/OCC.
-    Tự động tìm mặt phẳng lớn nhất, trích xuất biên dạng ngoài/trong và lỗ khoan.
-    """
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -198,12 +191,9 @@ def process_cad_file_with_occ(file_bytes, filename):
             os.remove(temp_path)
 
 # ============================================================
-# 6. PHÂN TÍCH EDGE CAD
+# 6. PHÂN TÍCH EDGE CAD (ĐÃ SỬA LỖI DISTANCE)
 # ============================================================
 def parse_wire_edges_high_precision(wire, tolerance=0.05):
-    """
-    Đọc cấu trúc hình học chính xác từ OCC Wire.
-    """
     edges_data = []
     for edge in wire.Edges():
         g_type = edge.geomType()
@@ -224,7 +214,10 @@ def parse_wire_edges_high_precision(wire, tolerance=0.05):
             cx = center.x
             cy = center.y
 
-            if start.Distance(end) < 1e-4:
+            # --- SỬA LỖI TẠI ĐÂY ---
+            # Tính khoảng cách giữa điểm đầu và cuối bằng độ dài của Vector hiệu (start - end)
+            dist = (start - end).Length
+            if dist < 1e-4:
                 edges_data.append({
                     "type": "CIRCLE",
                     "center": (cx, cy),
@@ -355,7 +348,6 @@ def perform_advanced_best_fit_nesting(parts_list, sheet_w, sheet_h, offset_val, 
         best_sheet_idx = -1
         min_waste_score = float("inf")
 
-        # Tìm vị trí tối ưu trên các tấm ván sẵn có
         for s_idx, sheet_info in enumerate(nested_sheets):
             placed_polys = sheet_info["placed_buffered_polygons"]
             anchor_points = [(margin_val, margin_val)]
@@ -404,7 +396,6 @@ def perform_advanced_best_fit_nesting(parts_list, sheet_w, sheet_h, offset_val, 
                             )
                         }
 
-        # Đặt cấu kiện vào ván
         if best_position and best_sheet_idx != -1:
             sheet_info = nested_sheets[best_sheet_idx]
             sheet_info["parts"].append({
@@ -417,7 +408,6 @@ def perform_advanced_best_fit_nesting(parts_list, sheet_w, sheet_h, offset_val, 
             })
             sheet_info["placed_buffered_polygons"].append(best_position["candidate_poly"])
         else:
-            # Tạo một tấm ván mới hoàn toàn
             new_idx = len(nested_sheets) + 1
             rot_poly = rotate(normalized_poly, 0, origin=(0, 0))
             r_minx, r_miny, _, _ = rot_poly.bounds
@@ -518,7 +508,7 @@ def export_original_geometry_to_dxf(msp, nested_sheets, sheet_w, sheet_h):
         sheet_offset_x += (sheet_w + 300)
 
 # ============================================================
-# 12. KHÔI PHỤC & HOÀN THIỆN: XUẤT DXF ĐƯỜNG TÂM DAO (BÙ DAO TRỰC TIẾP)
+# 12. XUẤT DXF ĐƯỜNG TÂM DAO (BÙ DAO TRỰC TIẾP)
 # ============================================================
 def export_compensated_toolpath_to_dxf(msp, nested_sheets, sheet_w, sheet_h, tool_r):
     sheet_offset_x = 0
@@ -534,7 +524,6 @@ def export_compensated_toolpath_to_dxf(msp, nested_sheets, sheet_w, sheet_h, too
             angle = p_node["angle"]
             orig_x, orig_y = p_node["original_offset"]
 
-            # Lỗ khoan tròn: Không bù bán kính dao (Giữ nguyên tâm lỗ mồi)
             for hole in ref["holes"]:
                 if not hole["is_drill"]:
                     continue
@@ -543,25 +532,21 @@ def export_compensated_toolpath_to_dxf(msp, nested_sheets, sheet_w, sheet_h, too
                         cx, cy = transform_point(edge["center"][0], edge["center"][1], dx, dy, angle, orig_x, orig_y)
                         msp.add_circle(center=(cx, cy), radius=edge["radius"], dxfattribs={"layer": "CNC_INNER_DRILL"})
 
-            # Thực hiện bù dao (Phóng to biên ngoài bằng +R, thu nhỏ lỗ trong bằng -R)
             compensated = placed_poly.buffer(tool_r, resolution=64, join_style=JOIN_STYLE.round)
             compensated = repair_geometry(compensated)
 
             if compensated.is_empty:
                 continue
 
-            # Chuẩn hóa cấu trúc Polygon (Hỗ trợ cả trường hợp vỡ thành MultiPolygon)
             polygons = [compensated] if isinstance(compensated, Polygon) else list(compensated.geoms)
 
             for poly in polygons:
-                # 1. Đường chạy dao cho Biên Ngoài (Phình ra ngoài)
                 outer_coords = list(poly.exterior.coords)
                 for i in range(len(outer_coords) - 1):
                     p1 = (outer_coords[i][0] + ox, outer_coords[i][1])
                     p2 = (outer_coords[i+1][0] + ox, outer_coords[i+1][1])
                     msp.add_line(p1, p2, dxfattribs={"layer": "CNC_COMPENSATED_PATH"})
 
-                # 2. Đường chạy dao cho Lỗ Cắt Trong (Thu hẹp vào trong)
                 for interior in poly.interiors:
                     interior_coords = list(interior.coords)
                     for i in range(len(interior_coords) - 1):
@@ -602,7 +587,6 @@ if uploaded_files:
 
         st.subheader(f"📐 Sơ đồ sắp xếp phôi ván thông minh ({len(nesting_results)} Tấm ván)")
 
-        # Render trực quan sơ đồ sắp xếp phôi ván
         for idx, sheet in enumerate(nesting_results):
             st.write(f"### 🟫 Sơ đồ mặt cắt tấm ván số: {sheet['sheet_id']}")
             fig, ax = plt.subplots(figsize=(12, 5))
@@ -629,11 +613,9 @@ if uploaded_files:
         st.subheader("💾 TẢI FILE DXF & MAPPING HƯỚNG DẪN ĐƯỜNG DAO")
         col1, col2 = st.columns(2)
 
-        # Khởi tạo bản vẽ ezdxf trống
         doc = ezdxf.new('R2010')
         msp = doc.modelspace()
 
-        # Tạo layer phục vụ xuất bản vẽ
         doc.layers.new(name='CNC_SHEET_BORDER', dxfattribs={'color': 8})
         
         if "CAM" in compensation_mode:
@@ -642,11 +624,10 @@ if uploaded_files:
             doc.layers.new(name='CNC_INNER_DRILL', dxfattribs={'color': 2})
             export_original_geometry_to_dxf(msp, nesting_results, sheet_W, sheet_H)
         else:
-            doc.layers.new(name='CNC_COMPENSATED_PATH', dxfattribs={'color': 3}) # Xanh lá cho đường tâm dao
-            doc.layers.new(name='CNC_INNER_DRILL', dxfattribs={'color': 2})      # Màu vàng cho lỗ mồi
+            doc.layers.new(name='CNC_COMPENSATED_PATH', dxfattribs={'color': 3})
+            doc.layers.new(name='CNC_INNER_DRILL', dxfattribs={'color': 2})
             export_compensated_toolpath_to_dxf(msp, nesting_results, sheet_W, sheet_H, tool_radius)
 
-        # Xuất buffer chuỗi của DXF
         out_stream = io.StringIO()
         doc.write(out_stream)
         dxf_data = out_stream.getvalue()
