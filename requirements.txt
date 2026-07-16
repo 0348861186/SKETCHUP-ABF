@@ -1,8 +1,5 @@
-Plaintext
 streamlit
-ezdxf
-rectpack
 matplotlib
+rectpack
+ezdxf
 numpy
-lxml
-
