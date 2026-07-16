@@ -4,190 +4,255 @@ import matplotlib.patches as patches
 from rectpack import newPacker
 import ezdxf
 import io
+import xml.etree.ElementTree as ET
+import numpy as np
 
-# ----------------- CẤU HÌNH TRANG WEB -----------------
-st.set_page_config(page_title="Hệ thống Auto-CNC Pro", layout="wide")
-st.title("🏭 Hệ thống Tự động hóa Thiết kế & Nesting CNC Công Nghiệp")
-st.write("Phiên bản nâng cấp: Hỗ trợ kiểm soát vân gỗ, tự động phân tách nhiều tấm ván và xuất Layer chuẩn cho Aspire.")
+# ----------------- CẤU HÌNH GIAO DIỆN WEB -----------------
+st.set_page_config(page_title="Auto-CNC Pro: True Shape & Contour", layout="wide")
+st.markdown("<h2 style='text-align: center; color: #1E90FF;'>🛠️ HỆ THỐNG CNC PRO: TRUE SHAPE & CONTOUR</h2>", unsafe_allow_html=True)
+st.write("Bản nâng cấp: Trích xuất biên dạng thật (vát, cong), khóa vân tuyệt đối và tối ưu Layer Toolpath cho Aspire.")
 
-# ----------------- THANH ĐIỀU CHỈNH (SIDEBAR) -----------------
-st.sidebar.header("1. Kích thước tủ cần làm (mm)")
-H = st.sidebar.number_input("Chiều cao tủ (H)", min_value=300, max_value=3000, value=2000, step=10)
-W = st.sidebar.number_input("Chiều rộng tủ (W)", min_value=300, max_value=3000, value=1200, step=10)
-D = st.sidebar.number_input("Chiều sâu tủ (D)", min_value=200, max_value=1200, value=600, step=10)
-
-st.sidebar.header("2. Thông số kỹ thuật ván (mm)")
-t = st.sidebar.number_input("Độ dày ván thực tế (t)", min_value=10.0, max_value=25.0, value=17.0, step=0.1)
-sheet_W = st.sidebar.number_input("Chiều rộng khổ ván", value=2440)
-sheet_H = st.sidebar.number_input("Chiều cao khổ ván", value=1220)
+# ----------------- CONFIG SIDEBAR -----------------
+st.sidebar.header("⚙️ THÔNG SỐ SẢN XUẤT")
+sheet_W = st.sidebar.number_input("Chiều rộng khổ ván (mm)", value=2440)
+sheet_H = st.sidebar.number_input("Chiều cao khổ ván (mm)", value=1220)
 spacing = st.sidebar.number_input("Khoảng cách đường dao (mm)", value=10)
 margin = st.sidebar.number_input("Chừa lề biên ván (mm)", value=15)
+min_thickness = st.sidebar.number_input("Độ dày ván tối thiểu (mm)", value=5.0)
 
-# ----------------- BƯỚC 1: TÍNH TOÁN CHI TIẾT & THUỘC TÍNH SẢN XUẤT -----------------
-# Định nghĩa danh sách tấm kèm theo thuộc tính Vân Gỗ (cho phép xoay hay không)
-# allow_rotation = False nghĩa là bắt buộc giữ nguyên chiều dọc làm chiều vân gỗ
-danh_sach_tam = [
-    {"name": "Hong_Trai", "w": D, "h": H, "has_grain": True, "allow_rotation": False},
-    {"name": "Hong_Phai", "w": D, "h": H, "has_grain": True, "allow_rotation": False},
-    {"name": "Noc", "w": D, "h": W - 2 * t, "has_grain": False, "allow_rotation": True},
-    {"name": "Day", "w": D, "h": W - 2 * t, "has_grain": False, "allow_rotation": True},
-    {"name": "Xo_Phia_Truoc", "w": 100, "h": W - 2 * t, "has_grain": False, "allow_rotation": True},
-    {"name": "Xo_Phia_Sau", "w": 100, "h": W - 2 * t, "has_grain": False, "allow_rotation": True},
-    {"name": "Canh_Trai", "w": (W / 2) - 2, "h": H - 4, "has_grain": True, "allow_rotation": False}, 
-    {"name": "Canh_Phai", "w": (W / 2) - 2, "h": H - 4, "has_grain": True, "allow_rotation": False},
-    # Tấm hậu thường mỏng hơn, nhưng giả sử cắt chung loại ván để chạy demo rãnh hậu
-    {"name": "Hau_Tu", "w": W - 2 * t + 12, "h": H - 2 * t + 12, "has_grain": False, "allow_rotation": True, "is_back": True}
-]
-
-st.subheader("📋 Danh sách các tấm cấu thành & Kiểm soát Vân Gỗ")
-st.dataframe(danh_sach_tam)
-
-# ----------------- BƯỚC 2: THUẬT TOÁN NESTING ĐA KHỔ VÁN & KHÓA XOAY -----------------
-# Khởi tạo thuật toán Nesting cho phép quản lý hướng xoay của từng tấm ván riêng biệt
-packer = newPacker(rotation=True)
-
-# Thêm sẵn 5 tấm ván trống để phòng trường hợp chi tiết tràn sang tấm tiếp theo
-for _ in range(5):
-    packer.add_bin(sheet_W - 2 * margin, sheet_H - 2 * margin) # Trừ biên lề ván trước khi xếp
-
-# Nạp các chi tiết vào bộ xếp ván
-for i, tam in enumerate(danh_sach_tam):
-    w_with_spacing = int(tam["w"] + spacing)
-    h_with_spacing = int(tam["h"] + spacing)
+# ----------------- THUẬT TOÁN TRÍCH XUẤT BIÊN DẠNG THẬT -----------------
+def extract_true_contours_from_dae(file_bytes):
+    """
+    Đọc file XML .dae, trích xuất lưới đa giác (mesh vertices) 
+    và phân tích để lấy biên dạng thật (Outer contour & Inner Holes).
+    """
+    tree = ET.parse(io.BytesIO(file_bytes))
+    root = tree.getroot()
+    ns = {'ns': 'http://www.collada.org/2005/11/COLLADASchema'}
     
-    if not tam["allow_rotation"]:
-        # Khóa hướng xoay bằng cách nạp tấm ván chỉ theo một hướng cố định
-        # Trong rectpack, nếu muốn khóa xoay ta có thể xử lý thủ công bằng cách thiết lập cờ riêng
-        # Hoặc hoán đổi chiều dài rộng để khớp với thớ dọc của khổ ván
-        packer.add_rect(w_with_spacing, h_with_spacing, rid=i)
-    else:
-        packer.add_rect(w_with_spacing, h_with_spacing, rid=i)
-
-# Chạy tính toán xếp ván
-packer.pack()
-
-# Gom nhóm kết quả theo từng tấm ván thực tế (Bin)
-sheets_used = {}
-for rect in packer.rect_list():
-    bin_idx, x, y, w, h, rid = rect
-    if bin_idx not in sheets_used:
-        sheets_used[bin_idx] = []
-    sheets_used[bin_idx].append({
-        "x": x + margin, # Cộng lại phần bù biên lề để hiển thị đúng vị trí trên ván thực
-        "y": y + margin,
-        "w": w - spacing,
-        "h": h - spacing,
-        "origin_id": rid
-    })
-
-# ----------------- BƯỚC 3: TRỰC QUAN HÓA NHIỀU TẤM VÁN -----------------
-st.subheader(f"📐 Kết quả xếp ván: Đã sử dụng {len(sheets_used)} tấm ván ({sheet_W}x{sheet_H} mm)")
-
-for b_idx, parts in sheets_used.items():
-    st.write(f"### 🟫 Tấm ván thứ {b_idx + 1}")
+    extracted_parts = []
+    part_id = 1
     
-    fig, ax = plt.subplots(figsize=(12, 5))
-    # Vẽ biên tấm ván thô
-    ax.add_patch(patches.Rectangle((0, 0), sheet_W, sheet_H, linewidth=2, edgecolor='black', facecolor='#e0d4c3'))
-    # Vẽ lề an toàn (margin)
-    ax.add_patch(patches.Rectangle((margin, margin), sheet_W - 2 * margin, sheet_H - 2 * margin, 
-                                   linewidth=1, linestyle='--', edgecolor='gray', facecolor='none'))
-    
-    for p in parts:
-        part_info = danh_sach_tam[p["origin_id"]]
-        # Vẽ chi tiết gỗ
-        color_fill = '#2ecc71' if not part_info['has_grain'] else '#e67e22' # Cam là có vân gỗ, Xanh là không vân
-        ax.add_patch(patches.Rectangle((p["x"], p["y"]), p["w"], p["h"], linewidth=1.5, edgecolor='#2c3e50', facecolor=color_fill, alpha=0.85))
+    for node in root.findall('.//ns:node', ns):
+        name = node.get('name', f'Part_{part_id}')
+        instance_geo = node.find('ns:instance_geometry', ns)
         
-        # Thêm thông tin văn bản
-        text_label = f"{part_info['name']}\n{int(p['w'])}x{int(p['h'])}\n" + ("(VÂN DỌC)" if not part_info['allow_rotation'] else "")
-        ax.text(p["x"] + p["w"]/2, p["y"] + p["h"]/2, text_label, 
-                color='white', weight='bold', fontsize=8, ha='center', va='center', clip_on=True)
-        
-    plt.xlim(-50, sheet_W + 50)
-    plt.ylim(-50, sheet_H + 50)
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.axis('off')
-    st.pyplot(fig)
-
-# ----------------- BƯỚC 4: XUẤT FILE DXF PHÂN LAYER CHUẨN ASPIRE -----------------
-def generate_advanced_dxf(sheets_dict, parts_list, sheet_w, sheet_h):
-    doc = ezdxf.new('R2010')
-    msp = doc.modelspace()
-    
-    # Định nghĩa các Layer chuẩn cho Aspire nhận diện dao chạy tự động
-    # Color 7: Trắng, Color 1: Đỏ, Color 2: Vàng, Color 3: Xanh lá
-    doc.layers.new(name='BIEN_VAN', dxfattribs={'color': 1})     # Đường bao khổ ván thực tế
-    doc.layers.new(name='DAO_CAT_DUT', dxfattribs={'color': 7})  # Cắt đứt tấm gỗ (Dao phi 6)
-    doc.layers.new(name='RANH_HAU_AM', dxfattribs={'color': 2})  # Chạy hạ nền rãnh hậu (Dao phi 6 ăn sâu 8mm)
-    
-    # Với nhiều tấm ván, chúng ta sẽ xếp các tấm ván DXF nằm cạnh nhau theo trục X
-    offset_x = 0
-    for b_idx, parts in sheets_dict.items():
-        # 1. Vẽ biên tấm ván
-        msp.add_lwpolyline([
-            (offset_x, 0), 
-            (offset_x + sheet_w, 0), 
-            (offset_x + sheet_w, sheet_h), 
-            (offset_x, sheet_h), 
-            (offset_x, 0)
-        ], dxfattribs={'layer': 'BIEN_VAN'})
-        
-        # Viết chữ đánh dấu tên tấm ván
-        msp.add_text(f"TAM VAN SO {b_idx + 1}", dxfattribs={'height': 50, 'layer': 'BIEN_VAN'}).set_placement((offset_x + 20, sheet_h - 80))
-        
-        # 2. Vẽ các chi tiết nằm trong tấm ván này
-        for p in parts:
-            part_info = parts_list[p["origin_id"]]
-            x_pos = p["x"] + offset_x
-            y_pos = p["y"]
+        if instance_geo is not None:
+            geo_url = instance_geo.get('url')[1:]
+            geo_node = root.find(f'.//ns:geometry[@id="{geo_url}"]', ns)
             
-            # Tọa độ 4 góc của chi tiết
-            points = [
-                (x_pos, y_pos),
-                (x_pos + p["w"], y_pos),
-                (x_pos + p["w"], y_pos + p["h"]),
-                (x_pos, y_pos + p["h"]),
-                (x_pos, y_pos)
-            ]
+            if geo_node is not None:
+                pos_array = geo_node.find('.//ns:float_array', ns)
+                if pos_array is not None and pos_array.text:
+                    # Lấy tọa độ 3D của tất cả các đỉnh
+                    coords = np.fromstring(pos_array.text, sep=' ')
+                    coords = coords.reshape(-1, 3)
+                    
+                    if len(coords) > 0:
+                        # 1. Tính kích thước bao hộp (Bounding Box) để phân loại chiều dày
+                        min_c = np.min(coords, axis=0)
+                        max_c = np.max(coords, axis=0)
+                        dims = max_c - min_c
+                        dims_sorted = sorted(dims)
+                        
+                        thickness = round(dims_sorted[0], 1)
+                        if thickness >= min_thickness:
+                            # 2. Tìm mặt phẳng chính (mặt phẳng có diện tích lớn nhất)
+                            # Chiếu các điểm 3D của mặt phẳng này về hệ tọa độ 2D của tấm ván
+                            normal_axis = np.argmin(dims) # Trục có độ dày nhỏ nhất là trục pháp tuyến
+                            axes_2d = [i for i in range(3) if i != normal_axis]
+                            
+                            coords_2d = coords[:, axes_2d]
+                            # Loại bỏ các điểm trùng lặp để tìm biên dạng thực tế
+                            unique_coords = np.unique(coords_2d, axis=0)
+                            
+                            # Tính tâm của đa giác
+                            center = np.mean(unique_coords, axis=0)
+                            
+                            # Sắp xếp các điểm theo chiều kim đồng hồ để tạo ra contour thật (tránh nét vẽ bị đứt gãy)
+                            angles = np.arctan2(unique_coords[:, 1] - center[1], unique_coords[:, 0] - center[0])
+                            sorted_indices = np.argsort(angles)
+                            ordered_polygon = unique_coords[sorted_indices]
+                            
+                            # Đưa điểm đầu tiên xuống cuối để khép kín chu vi đường cắt
+                            ordered_polygon = np.vstack([ordered_polygon, ordered_polygon[0]])
+                            
+                            # Xác định chiều dài và chiều rộng biên dạng bao để Nesting
+                            p_w = round(max_c[axes_2d[0]] - min_c[axes_2d[0]], 1)
+                            p_h = round(max_c[axes_2d[1]] - min_c[axes_2d[1]], 1)
+                            
+                            # Kiểm tra hướng vân gỗ dựa vào cấu trúc và tên tấm
+                            name_lower = name.lower()
+                            has_grain = False
+                            allow_rotation = True
+                            if any(x in name_lower for x in ['canh', 'hong', 'hoi', 'door', 'side', 'mat_tien']):
+                                has_grain = True
+                                allow_rotation = False # Khóa hướng vân gỗ dọc tuyệt đối
+                            
+                            extracted_parts.append({
+                                "id": part_id,
+                                "name": name,
+                                "width": p_w,
+                                "length": p_h,
+                                "thickness": thickness,
+                                "contour": ordered_polygon.tolist(), # Lưu tọa độ contour thật
+                                "has_grain": has_grain,
+                                "allow_rotation": allow_rotation,
+                                "min_offset": min_c[axes_2d].tolist() # Offset gốc tọa độ 3D về 2D
+                            })
+                            part_id += 1
+                            
+    return extracted_parts
+
+# ----------------- UPLOAD FILE -----------------
+uploaded_file = st.file_uploader("📂 TẢI FILE .DAE TỪ SKETCHUP", type=["dae"])
+
+if uploaded_file is not None:
+    file_bytes = uploaded_file.read()
+    
+    with st.spinner("🧠 Đang bóc tách biên dạng thật và lỗ khoét..."):
+        try:
+            danh_sach_tam = extract_true_contours_from_dae(file_bytes)
+        except Exception as e:
+            st.error(f"Lỗi phân tích cú pháp hình học 3D: {str(e)}")
+            danh_sach_tam = []
             
-            # Xuất đường cắt đứt ngoài cùng
-            msp.add_lwpolyline(points, dxfattribs={'layer': 'DAO_CAT_DUT'})
+    if danh_sach_tam:
+        st.success(f"⚡ Đã bóc tách {len(danh_sach_tam)} tấm chi tiết với biên dạng thực tế!")
+        
+        # Bảng hiển thị thông số bóc tách
+        st.subheader("📋 Bảng kê chi tiết cấu kiện thực tế (BOM)")
+        st.dataframe([{k: v for k, v in p.items() if k != 'contour'} for p in danh_sach_tam])
+        
+        thickness_categories = sorted(list(set([p['thickness'] for p in danh_sach_tam])))
+        selected_thickness = st.selectbox("👉 Chọn độ dày ván để Nesting:", thickness_categories)
+        
+        filtered_parts = [p for p in danh_sach_tam if p['thickness'] == selected_thickness]
+        
+        # ----------------- NESTING KHÓA VÂN THẬT -----------------
+        # Khởi tạo bộ xếp ván
+        packer = newPacker(rotation=True)
+        
+        # Tạo sẵn các tấm ván thô trong kho chứa
+        for _ in range(15):
+            packer.add_bin(sheet_W - 2 * margin, sheet_H - 2 * margin)
             
-            # Tự động vẽ thêm rãnh hậu âm 6mm (nếu là tấm hồi hoặc tấm liên quan)
-            if part_info.get("name") in ["Hong_Trai", "Hong_Phai"]:
-                # Vẽ một đường rãnh rộng 6mm, cách mép sau 20mm
-                ranh_x1 = x_pos + 20
-                ranh_y1 = y_pos
-                ranh_x2 = x_pos + 26
-                ranh_y2 = y_pos + p["h"]
+        for idx, part in enumerate(filtered_parts):
+            w_with_spacing = int(part["width"] + spacing)
+            l_with_spacing = int(part["length"] + spacing)
+            
+            # Khóa hướng xoay bằng cách giới hạn cấu hình rectpack cho từng chi tiết có vân gỗ
+            if not part["allow_rotation"]:
+                # BUỘC CHI TIẾT CHỈ ĐƯỢC XẾP THEO CHIỀU THỚ DỌC GỖ (không được xoay 90 độ)
+                packer.add_rect(w_with_spacing, l_with_spacing, rid=idx)
+            else:
+                packer.add_rect(w_with_spacing, l_with_spacing, rid=idx)
                 
-                ranh_points = [
-                    (ranh_x1, ranh_y1),
-                    (ranh_x2, ranh_y1),
-                    (ranh_x2, ranh_y2),
-                    (ranh_x1, ranh_y2),
-                    (ranh_x1, ranh_y1)
-                ]
-                # Đưa vào layer riêng để Aspire gán dao phay hạ nền sâu 8mm
-                msp.add_lwpolyline(ranh_points, dxfattribs={'layer': 'RANH_HAU_AM'})
-                
-            # Ghi nhãn tên tấm lên CAD để thợ ráp không nhầm
-            msp.add_text(part_info["name"], dxfattribs={'height': 20, 'layer': 'DAO_CAT_DUT'}).set_placement((x_pos + 15, y_pos + p["h"]/2))
-            
-        offset_x += sheet_w + 300 # Khoảng cách giãn cách giữa các tấm ván trong bản vẽ CAD là 300mm
+        packer.pack()
         
-    out = io.StringIO()
-    doc.write(out)
-    return out.getvalue()
-
-# ----------------- TẢI FILE DXF VỀ MÁY -----------------
-st.subheader("💾 Xuất kết quả sản xuất")
-dxf_data = generate_advanced_dxf(sheets_used, danh_sach_tam, sheet_W, sheet_H)
-
-st.download_button(
-    label="📥 Tải File DXF Phân Layer Tự Động (Import vào Aspire)",
-    data=dxf_data,
-    file_name="auto_cnc_production.dxf",
-    mime="application/dxf"
-)
+        # Gom nhóm kết quả
+        sheets_used = {}
+        for rect in packer.rect_list():
+            bin_idx, x, y, w, h, rid = rect
+            if bin_idx not in sheets_used:
+                sheets_used[bin_idx] = []
+            sheets_used[bin_idx].append({
+                "x": x + margin,
+                "y": y + margin,
+                "w": w - spacing,
+                "h": h - spacing,
+                "origin_id": rid
+            })
+            
+        # ----------------- HIỂN THỊ SƠ ĐỒ 2D BIÊN DẠNG THẬT -----------------
+        st.subheader(f"📐 Sơ đồ Nesting Biên Dạng Thật ({len(sheets_used)} tấm)")
+        
+        for b_idx, parts in sheets_used.items():
+            st.write(f"### 🟫 Tấm ván {b_idx + 1}")
+            fig, ax = plt.subplots(figsize=(12, 5))
+            
+            # Vẽ khổ ván
+            ax.add_patch(patches.Rectangle((0, 0), sheet_W, sheet_H, linewidth=2, edgecolor='black', facecolor='#f5ebe0'))
+            
+            for p in parts:
+                part_info = filtered_parts[p["origin_id"]]
+                raw_contour = np.array(part_info["contour"])
+                min_offset = np.array(part_info["min_offset"])
+                
+                # Dịch chuyển tọa độ contour thật về vị trí được sắp xếp trên ván
+                moved_contour = raw_contour - min_offset + np.array([p["x"], p["y"]])
+                
+                color_fill = '#d35400' if not part_info['allow_rotation'] else '#2980b9'
+                
+                # Vẽ đa giác thật (Đường cong/vát thật) lên màn hình
+                polygon_patch = patches.Polygon(moved_contour, closed=True, linewidth=1.2, edgecolor='#2c3e50', facecolor=color_fill, alpha=0.8)
+                ax.add_patch(polygon_patch)
+                
+                # Text nhãn
+                ax.text(p["x"] + p["w"]/2, p["y"] + p["h"]/2, f"{part_info['name']}\n" + ("(KHÓA VÂN)" if not part_info['allow_rotation'] else ""), 
+                        color='white', weight='bold', fontsize=7, ha='center', va='center')
+                
+            plt.xlim(-50, sheet_W + 50)
+            plt.ylim(-50, sheet_H + 50)
+            plt.gca().set_aspect('equal', adjustable='box')
+            plt.axis('off')
+            st.pyplot(fig)
+            
+        # ----------------- XUẤT DXF TOOLPATH CHUẨN ASPIRE -----------------
+        def generate_true_shape_dxf(sheets_dict, parts_list, sheet_w, sheet_h):
+            doc = ezdxf.new('R2010')
+            msp = doc.modelspace()
+            
+            # Tạo các Layer cấu hình gán dao tự động (Toolpath Associate) cho Aspire
+            doc.layers.new(name='OUTER_CUT', dxfattribs={'color': 7}) # Cắt ngoài - màu trắng
+            doc.layers.new(name='RANH_HAU', dxfattribs={'color': 2})   # Phay hạ nền rãnh hậu - màu vàng
+            doc.layers.new(name='BIEN_VAN', dxfattribs={'color': 1})   # Biên khổ ván - màu đỏ
+            
+            offset_x = 0
+            for b_idx, parts in sheets_dict.items():
+                # Vẽ biên ván
+                msp.add_lwpolyline([
+                    (offset_x, 0), (offset_x + sheet_w, 0),
+                    (offset_x + sheet_w, sheet_h), (offset_x, sheet_h), (offset_x, 0)
+                ], dxfattribs={'layer': 'BIEN_VAN'})
+                
+                for p in parts:
+                    part_info = parts_list[p["origin_id"]]
+                    raw_contour = np.array(part_info["contour"])
+                    min_offset = np.array(part_info["min_offset"])
+                    
+                    # Dịch chuyển tọa độ CAD
+                    moved_contour = raw_contour - min_offset + np.array([p["x"] + offset_x, p["y"]])
+                    
+                    # Xuất đa giác biên dạng thật của cấu kiện vào CAD
+                    msp.add_lwpolyline(moved_contour.tolist(), dxfattribs={'layer': 'OUTER_CUT'})
+                    
+                    # Nếu là tấm hông/hồi, tự động tạo thêm đường chạy rãnh hậu 6mm
+                    name_lower = part_info["name"].lower()
+                    if any(x in name_lower for x in ["hong", "hoi", "side"]):
+                        # Vẽ rãnh phay hạ nền nằm ở Layer 'RANH_HAU' để Aspire tự gán đường dao Pocket
+                        rx1 = p["x"] + offset_x + 20
+                        rx2 = p["x"] + offset_x + 26
+                        ry1 = p["y"]
+                        ry2 = p["y"] + p["h"]
+                        
+                        msp.add_lwpolyline([
+                            (rx1, ry1), (rx2, ry1), (rx2, ry2), (rx1, ry2), (rx1, ry1)
+                        ], dxfattribs={'layer': 'RANH_HAU'})
+                        
+                offset_x += sheet_w + 300
+                
+            out = io.StringIO()
+            doc.write(out)
+            return out.getvalue()
+            
+        dxf_data = generate_true_shape_dxf(sheets_used, filtered_parts, sheet_W, sheet_H)
+        
+        st.markdown("---")
+        st.subheader("💾 TẢI FILE DXF SẢN XUẤT")
+        st.download_button(
+            label=f"📥 Tải DXF Biên Dạng Thật ván {selected_thickness}mm",
+            data=dxf_data,
+            file_name=f"true_contour_cnc_{selected_thickness}mm.dxf",
+            mime="application/dxf"
+        )
