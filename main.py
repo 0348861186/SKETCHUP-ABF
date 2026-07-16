@@ -218,27 +218,28 @@ def parse_wire_edges_high_precision(wire, tolerance=0.05):
             })
 
         elif g_type == "CIRCLE":
-            circle_geom = edge.curve()
-            center = circle_geom.Location()
-            radius = circle_geom.Radius()
-            cx, cy = center.X(), center.Y()
+    radius = edge.radius()
+    center = edge.Center()
 
-            if start.Distance(end) < 1e-4:
-                edges_data.append({
-                    "type": "CIRCLE",
-                    "center": (cx, cy),
-                    "radius": radius
-                })
-            else:
-                angle_start = math.degrees(math.atan2(start.y - cy, start.x - cx))
-                angle_end = math.degrees(math.atan2(end.y - cy, end.x - cx))
-                edges_data.append({
-                    "type": "ARC",
-                    "center": (cx, cy),
-                    "radius": radius,
-                    "start_angle": angle_start,
-                    "end_angle": angle_end
-                })
+    cx = center.x
+    cy = center.y
+
+    if start.Distance(end) < 1e-4:
+        edges_data.append({
+            "type": "CIRCLE",
+            "center": (cx, cy),
+            "radius": radius
+        })
+    else:
+        angle_start = math.degrees(math.atan2(start.y - cy, start.x - cx))
+        angle_end = math.degrees(math.atan2(end.y - cy, end.x - cx))
+        edges_data.append({
+            "type": "ARC",
+            "center": (cx, cy),
+            "radius": radius,
+            "start_angle": angle_start,
+            "end_angle": angle_end
+        })
 
         elif g_type in ["BSPLINE", "BEZIER", "OFFSET"]:
             try:
