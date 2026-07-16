@@ -1,7 +1,7 @@
-streamlit==1.40.0
+streamlit
 numpy
 pandas
 matplotlib
+cadquery
 shapely
 ezdxf
-cadquery==2.4.0
