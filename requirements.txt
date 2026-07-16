@@ -1,6 +1,7 @@
 streamlit
-matplotlib
-rectpack
-ezdxf
 numpy
-cadquery
+pandas
+matplotlib
+shapely
+ezdxf
+cadquery==2.4.0
