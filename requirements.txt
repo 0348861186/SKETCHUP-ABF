@@ -6,3 +6,4 @@ cadquery
 shapely
 ezdxf
 cadquery==2.8.0
+pyvista
