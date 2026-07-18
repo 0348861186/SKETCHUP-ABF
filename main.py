@@ -530,7 +530,7 @@ def generate_program_footer(dialect):
     return ["M5", "M30"]
 
 # ============================================================
-# 9. MAIN APP ORCHESTRATION
+# 9. MAIN APP ORCHESTRATION (ĐÃ TỐI ƯU GOM LAYER THEO TÁC VỤ)
 # ============================================================
 uploaded_files = st.file_uploader("Tải lên bản vẽ thiết kế 3D toàn bộ khối tủ (.STEP / .STP)", accept_multiple_files=True, type=["step", "stp"])
 
@@ -539,7 +539,6 @@ if uploaded_files:
     for f in uploaded_files:
         with st.spinner(f"🚀 Đang rã cụm lắp ráp & hạ phẳng khối 3D: {f.name}"):
             try:
-                # Gọi hàm phân rã thông minh mới lập trình
                 parts = process_full_assembly_step(f.getvalue(), f.name, sheet_thickness, chord_tolerance)
                 all_extracted_parts.extend(parts)
                 st.success(f"✅ Rã thành công! Tìm thấy **{len(parts)}** tấm ván đủ điều kiện cắt từ tệp {f.name}.")
@@ -559,53 +558,83 @@ if uploaded_files:
             ax.add_patch(mpatches.Rectangle((0, 0), sheet_W, sheet_H, color="darkgrey", alpha=0.3, label="Khổ ván gốc"))
             ax.add_patch(mpatches.Rectangle((margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, fill=False, linestyle="--", color="red"))
             
+            # Khởi tạo đầu file G-Code cho tấm này
             all_gcode_blocks = generate_program_header(cnc_dialect, t1_spindle, safe_Z)
 
+            # Danh sách tạm để gom nhóm tác vụ trên toàn bộ tấm
+            inner_features_todo = []
+            outer_cuts_todo = []
+
+            # Bước 1: Duyệt qua tất cả chi tiết trên tấm để vẽ hình và gom nhóm tác vụ
             for p_idx, placed in enumerate(sheet["parts"]):
                 ref = placed["part_ref"]
                 poly = placed["placed_polygon"]
                 
+                # Vẽ mô phỏng chi tiết lên giao diện
                 x, y = poly.exterior.xy
                 ax.plot(x, y, "b-", linewidth=2)
                 ax.fill(x, y, "skyblue", alpha=0.5)
                 ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=8, weight='bold')
 
+                # Tọa độ hóa đường cắt viền ngoài (Outer Cut) và gom vào nhóm sau cùng
                 trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                 outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", tool_radius)
-                
                 for path in outer_paths:
                     if len(path) >= 2:
-                        px, py = zip(*path)
-                        ax.plot(px, py, "g--", alpha=0.8)
+                        outer_cuts_todo.append(path)
+
+                # Tọa độ hóa các lỗ, rãnh hèm (Inner Cut / Pocket) và gom vào nhóm ưu tiên cắt trước
+                for feat in ref["features"]:
+                    trans_feat_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
+                    feat_paths = get_true_offset_toolpath(trans_feat_edges, feat["type"], tool_radius)
+                    for path in feat_paths:
+                        if len(path) >= 2:
+                            inner_features_todo.append({"path": path, "type": feat["type"], "depth": feat["depth"]})
+
+            # Bước 2: Xuất G-Code cho LAYER 1 - TẤT CẢ CÁC LỖ KHOÉT / RÃNH TRONG (Cắt trước để phôi ổn định)
+            if inner_features_todo:
+                all_gcode_blocks.append("; ==============================================")
+                all_gcode_blocks.append("; LAYER 1: TOTAL INNER CUTS & POCKETS (PRIORITY)")
+                all_gcode_blocks.append("; ==============================================")
+                for item in inner_features_todo:
+                    path = item["path"]
+                    px, py = zip(*path)
+                    ax.plot(px, py, "m:", alpha=0.7) # Vẽ nét đứt màu hồng cho lỗ/rãnh
+                    
+                    all_gcode_blocks.extend(generate_gcode_for_toolpath(
+                        path, item["type"], item["depth"], max_stepdown,
+                        t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
+                        enable_ramping, False, tab_width, tab_thickness, tab_count_default, cnc_dialect
+                    ))
+
+            # Bước 3: Xuất G-Code cho LAYER 2 - TẤT CẢ ĐƯỜNG CẮT ĐỨT VIỀN NGOÀI (Cắt sau cùng)
+            if outer_cuts_todo:
+                all_gcode_blocks.append("; ==============================================")
+                all_gcode_blocks.append("; LAYER 2: TOTAL OUTER CONTOUR CUTS")
+                all_gcode_blocks.append("; ==============================================")
+                for path in outer_cuts_todo:
+                    px, py = zip(*path)
+                    ax.plot(px, py, "g--", alpha=0.8) # Vẽ nét đứt màu xanh lá cho viền ngoài
+                    
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
                         path, "CNC_OUTER_CUT", sheet_thickness + thru_overlap, max_stepdown,
                         t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
                         enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default, cnc_dialect
                     ))
 
-                for feat in ref["features"]:
-                    trans_feat_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
-                    feat_paths = get_true_offset_toolpath(trans_feat_edges, feat["type"], tool_radius)
-                    
-                    for path in feat_paths:
-                        if len(path) >= 2:
-                            px, py = zip(*path)
-                            ax.plot(px, py, "m:", alpha=0.7)
-                        all_gcode_blocks.extend(generate_gcode_for_toolpath(
-                            path, feat["type"], feat["depth"], max_stepdown,
-                            t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
-                            enable_ramping, False, tab_width, tab_thickness, tab_count_default, cnc_dialect
-                        ))
-
+            # Kết thúc G-code cho tấm này
             all_gcode_blocks.extend(generate_program_footer(cnc_dialect))
+            
+            # Hiển thị biểu đồ
             ax.set_aspect('equal', adjustable='box')
             st.pyplot(fig)
             plt.close(fig)
 
+            # Nút tải xuống file G-code đã tối ưu hóa
             gcode_txt = "\n".join(all_gcode_blocks)
             st.download_button(
                 label=f"💾 Tải xuống G-Code Tấm #{sheet['sheet_id']}",
                 data=gcode_txt,
-                file_name=f"CAM_Engine_Full_Assembly_Sheet_{sheet['sheet_id']}.nc",
+                file_name=f"CAM_Engine_Optimized_Sheet_{sheet['sheet_id']}.nc",
                 mime="text/plain"
             )
