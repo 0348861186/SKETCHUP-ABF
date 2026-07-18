@@ -10,18 +10,8 @@ import matplotlib.patches as mpatches
 # CAD / CAM CORE
 # ============================================================
 import cadquery as cq
-
-from shapely.geometry import (
-    Polygon,
-    MultiPolygon,
-    GeometryCollection
-)
-
-from shapely.affinity import (
-    translate,
-    rotate
-)
-
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
+from shapely.affinity import translate, rotate
 from shapely.geometry import JOIN_STYLE
 
 try:
@@ -32,1548 +22,387 @@ except ImportError:
     except ImportError:
         make_valid = None
 
-
 # ============================================================
 # 1. STREAMLIT CONFIGURATION
 # ============================================================
-
-st.set_page_config(
-    page_title="CNC CAM ENGINE PRO v7.0",
-    layout="wide"
-)
-
-st.markdown(
-    """
-    # 🏭 CNC CAM ENGINE PRO v7.0
-
-    ### AUTOMATIC 3D ASSEMBLY → NESTING → MULTI-TOOL CAM
-
-    **STEP Assembly → Tách chi tiết → Hạ phẳng → Nesting → Gom Toolpath theo Dao → Xuất G-Code**
-    """,
-    unsafe_allow_html=True
-)
-
+st.set_page_config(page_title="CNC CAM Engine Pro ATC v7.0", layout="wide")
+st.markdown("## 🏭 CNC CAM ENGINE PRO V7.0 - AUTOMATIC ATC & MULTI-TOOL MANAGEMENT")
 
 # ============================================================
-# 2. MATERIAL / SHEET CONFIGURATION
+# 2. SIDEBAR - ĐỔI THÀNH QUẢN LÝ 3 LOẠI DAO RIÊNG BIỆT
 # ============================================================
-
 st.sidebar.header("📐 THÔNG SỐ VẬT LIỆU PHÔI")
-
-sheet_W = st.sidebar.number_input(
-    "Chiều rộng khổ ván X (mm)",
-    min_value=100.0,
-    value=2440.0,
-    step=10.0
-)
-
-sheet_H = st.sidebar.number_input(
-    "Chiều cao khổ ván Y (mm)",
-    min_value=100.0,
-    value=1220.0,
-    step=10.0
-)
-
-sheet_thickness = st.sidebar.number_input(
-    "Độ dày ván tiêu chuẩn Z (mm)",
-    min_value=0.1,
-    value=17.0,
-    step=0.1
-)
-
-margin = st.sidebar.number_input(
-    "Khoảng cách biên tấm ván (mm)",
-    min_value=0.0,
-    value=15.0,
-    step=1.0
-)
-
-safety_spacing = st.sidebar.number_input(
-    "Khoảng cách an toàn giữa chi tiết (mm)",
-    min_value=0.0,
-    value=6.0,
-    step=0.5
-)
-
-
-# ============================================================
-# 3. TOOL CONFIGURATION
-# ============================================================
+sheet_W = st.sidebar.number_input("Chiều rộng khổ ván X (mm)", min_value=100.0, value=2440.0, step=10.0)
+sheet_H = st.sidebar.number_input("Chiều cao khổ ván Y (mm)", min_value=100.0, value=1220.0, step=10.0)
+sheet_thickness = st.sidebar.number_input("Độ dày ván tiêu chuẩn Z (mm)", min_value=0.1, value=17.0, step=0.1)
+margin = st.sidebar.number_input("Khoảng cách biên tấm ván (mm)", min_value=0.0, value=15.0, step=1.0)
+safety_spacing = st.sidebar.number_input("Khoảng cách giữa các chi tiết (mm)", min_value=0.0, value=6.0, step=0.5)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔧 CẤU HÌNH MULTI-TOOL CNC")
+st.sidebar.header("🧰 CẤU HÌNH ĐÀI DAO (ATC SPINDLE)")
 
+# Cấu hình Dao 1: Cắt đứt
+st.sidebar.markdown("### 🔴 DAO 1 (Cắt đứt biên dạng)")
+t1_slot = st.sidebar.number_input("Vị trí ổ dao (T)", min_value=1, value=1, step=1)
+t1_dia = st.sidebar.number_input("Đường kính dao 1 (mm)", min_value=0.1, value=6.0, step=0.1)
+t1_feed = st.sidebar.number_input("Tốc độ F1 (mm/min)", min_value=100, value=3500, step=100)
 
-# ------------------------------------------------------------
-# TOOL T1 - INNER CUT
-# ------------------------------------------------------------
+# Cấu hình Dao 2: Khoét lỗ thủng
+st.sidebar.markdown("### 🟢 DAO 2 (Khoét lỗ thủng bên trong)")
+t2_slot = st.sidebar.number_input("Vị trí ổ dao (T) ", min_value=1, value=2, step=1)
+t2_dia = st.sidebar.number_input("Đường kính dao 2 (mm)", min_value=0.1, value=4.0, step=0.1)
+t2_feed = st.sidebar.number_input("Tốc độ F2 (mm/min)", min_value=100, value=2500, step=100)
 
-st.sidebar.markdown("### 🔵 T1 - INNER CUT / LỖ")
-
-t1_dia = st.sidebar.number_input(
-    "T1 - Đường kính dao (mm)",
-    min_value=0.1,
-    value=3.0,
-    step=0.1
-)
-
-t1_feed = st.sidebar.number_input(
-    "T1 - Feed (mm/min)",
-    min_value=100,
-    value=2500,
-    step=100
-)
-
-t1_plunge = st.sidebar.number_input(
-    "T1 - Plunge (mm/min)",
-    min_value=50,
-    value=800,
-    step=50
-)
-
-t1_spindle = st.sidebar.number_input(
-    "T1 - Spindle (RPM)",
-    min_value=1000,
-    value=18000,
-    step=500
-)
-
-t1_max_stepdown = st.sidebar.number_input(
-    "T1 - Max Stepdown (mm)",
-    min_value=0.5,
-    value=4.0,
-    step=0.5
-)
-
-
-# ------------------------------------------------------------
-# TOOL T2 - POCKET
-# ------------------------------------------------------------
-
-st.sidebar.markdown("### 🟣 T2 - POCKET / HẠ NỀN")
-
-t2_dia = st.sidebar.number_input(
-    "T2 - Đường kính dao (mm)",
-    min_value=0.1,
-    value=6.0,
-    step=0.1
-)
-
-t2_feed = st.sidebar.number_input(
-    "T2 - Feed (mm/min)",
-    min_value=100,
-    value=3500,
-    step=100
-)
-
-t2_plunge = st.sidebar.number_input(
-    "T2 - Plunge (mm/min)",
-    min_value=50,
-    value=1200,
-    step=50
-)
-
-t2_spindle = st.sidebar.number_input(
-    "T2 - Spindle (RPM)",
-    min_value=1000,
-    value=18000,
-    step=500
-)
-
-t2_max_stepdown = st.sidebar.number_input(
-    "T2 - Max Stepdown (mm)",
-    min_value=0.5,
-    value=6.0,
-    step=0.5
-)
-
-
-# ------------------------------------------------------------
-# TOOL T3 - OUTER CUT
-# ------------------------------------------------------------
-
-st.sidebar.markdown("### 🟢 T3 - OUTER CUT / CẮT BIÊN")
-
-t3_dia = st.sidebar.number_input(
-    "T3 - Đường kính dao (mm)",
-    min_value=0.1,
-    value=6.0,
-    step=0.1
-)
-
-t3_feed = st.sidebar.number_input(
-    "T3 - Feed (mm/min)",
-    min_value=100,
-    value=3500,
-    step=100
-)
-
-t3_plunge = st.sidebar.number_input(
-    "T3 - Plunge (mm/min)",
-    min_value=50,
-    value=1200,
-    step=50
-)
-
-t3_spindle = st.sidebar.number_input(
-    "T3 - Spindle (RPM)",
-    min_value=1000,
-    value=18000,
-    step=500
-)
-
-t3_max_stepdown = st.sidebar.number_input(
-    "T3 - Max Stepdown (mm)",
-    min_value=0.5,
-    value=6.0,
-    step=0.5
-)
-
-
-# ============================================================
-# 4. GENERAL CNC CONFIGURATION
-# ============================================================
+# Cấu hình Dao 3: Hạ nền / Làm túi
+st.sidebar.markdown("### 🔵 DAO 3 (Phá lòng / Hạ nền / Pocket)")
+t3_slot = st.sidebar.number_input("Vị trí ổ dao (T)  ", min_value=1, value=3, step=1)
+t3_dia = st.sidebar.number_input("Đường kính dao 3 (mm)", min_value=0.1, value=10.0, step=0.1)
+t3_feed = st.sidebar.number_input("Tốc độ F3 (mm/min)", min_value=100, value=4000, step=100)
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙ CẤU HÌNH CNC")
+st.sidebar.header("⚙ THÔNG SỐ VẬN HÀNH CHUNG")
+t1_plunge = st.sidebar.number_input("Tốc độ đâm dao F_plunge (mm/min)", min_value=50, value=1200, step=50)
+t1_spindle = st.sidebar.number_input("Tốc độ trục chính S (RPM)", min_value=1000, value=18000, step=500)
+max_stepdown = st.sidebar.number_input("Chiều sâu mỗi lớp Stepdown (mm)", min_value=0.5, value=6.0, step=0.5)
+safe_Z = st.sidebar.number_input("Safe Z (mm)", min_value=1.0, value=25.0, step=1.0)
+thru_overlap = st.sidebar.number_input("Độ sâu cắt xuyên thêm (mm)", min_value=0.0, value=0.5, step=0.1)
+chord_tolerance = 0.02
 
-chord_tolerance = st.sidebar.number_input(
-    "Dung sai spline (mm)",
-    min_value=0.005,
-    max_value=0.5,
-    value=0.02,
-    step=0.005,
-    format="%.3f"
-)
-
-enable_leadin = st.sidebar.checkbox(
-    "Kích hoạt Lead-in",
-    value=True
-)
-
-leadin_length = st.sidebar.number_input(
-    "Chiều dài Lead-in (mm)",
-    min_value=2.0,
-    value=5.0,
-    step=0.5
-)
-
-enable_ramping = st.sidebar.checkbox(
-    "Kích hoạt Continuous Spiral Ramp",
-    value=True
-)
-
-enable_tabs = st.sidebar.checkbox(
-    "Kích hoạt Structural Tabs",
-    value=True
-)
-
-tab_width = st.sidebar.number_input(
-    "Chiều dài Tab (mm)",
-    min_value=5.0,
-    value=20.0,
-    step=1.0
-)
-
-tab_thickness = st.sidebar.number_input(
-    "Độ dày vật liệu còn lại tại Tab (mm)",
-    min_value=0.5,
-    value=4.0,
-    step=0.5
-)
-
-tab_count_default = st.sidebar.slider(
-    "Số lượng Tab / chi tiết",
-    min_value=2,
-    max_value=8,
-    value=4
-)
-
-cnc_dialect = st.sidebar.selectbox(
-    "Post Processor",
-    [
-        "Fanuc / Syntec",
-        "Mach3 / Grbl",
-        "UGS",
-        "Weihong"
-    ]
-)
-
-safe_Z = st.sidebar.number_input(
-    "Safe Z (mm)",
-    min_value=1.0,
-    value=25.0,
-    step=1.0
-)
-
-thru_overlap = st.sidebar.number_input(
-    "Độ sâu cắt xuyên thêm (mm)",
-    min_value=0.0,
-    value=0.5,
-    step=0.1
-)
-
-
-# ============================================================
-# 5. TOOL DATABASE
-# ============================================================
-
-TOOLS = {
-
-    "T1": {
-        "name": "INNER_CUT",
-        "operation_types": [
-            "CNC_INNER_CUT"
-        ],
-        "diameter": t1_dia,
-        "radius": t1_dia / 2.0,
-        "feed": t1_feed,
-        "plunge": t1_plunge,
-        "spindle": t1_spindle,
-        "max_stepdown": t1_max_stepdown,
-        "order": 1
-    },
-
-    "T2": {
-        "name": "POCKET",
-        "operation_types": [
-            "CNC_POCKET"
-        ],
-        "diameter": t2_dia,
-        "radius": t2_dia / 2.0,
-        "feed": t2_feed,
-        "plunge": t2_plunge,
-        "spindle": t2_spindle,
-        "max_stepdown": t2_max_stepdown,
-        "order": 2
-    },
-
-    "T3": {
-        "name": "OUTER_CUT",
-        "operation_types": [
-            "CNC_OUTER_CUT"
-        ],
-        "diameter": t3_dia,
-        "radius": t3_dia / 2.0,
-        "feed": t3_feed,
-        "plunge": t3_plunge,
-        "spindle": t3_spindle,
-        "max_stepdown": t3_max_stepdown,
-        "order": 3
-    }
+# Gom từ điển quản lý dao để truyền vào hàm tính toán
+TOOLS_CONFIG = {
+    "CNC_OUTER_CUT": {"slot": int(t1_slot), "radius": t1_dia / 2.0, "feed": t1_feed},
+    "CNC_INNER_CUT": {"slot": int(t2_slot), "radius": t2_dia / 2.0, "feed": t2_feed},
+    "CNC_POCKET": {"slot": int(t3_slot), "radius": t3_dia / 2.0, "feed": t3_feed}
 }
 
+# Tận dụng lại bộ lề an toàn tối đa của dao lớn nhất để chống va chạm phôi khi Nesting
+max_tool_radius = max(t1_dia, t2_dia, t3_dia) / 2.0
+total_offset = max_tool_radius + safety_spacing
 
 # ============================================================
-# 6. GEOMETRY REPAIR
+# CÁC HÀM XỬ LÝ HÌNH HỌC (Giữ nguyên logic từ v6.0)
 # ============================================================
-
 def repair_geometry(geom):
-
-    if geom is None:
-        return geom
-
-    if geom.is_empty:
-        return geom
-
-    if geom.is_valid:
-        return geom
-
+    if geom is None or geom.is_empty: return geom
+    if geom.is_valid: return geom
     if make_valid is not None:
-
         try:
-
             fixed = make_valid(geom)
-
-            if not fixed.is_empty:
-                return fixed
-
-        except Exception:
-            pass
-
-    try:
-
-        fixed = geom.buffer(0)
-
-        if not fixed.is_empty:
-            return fixed
-
-    except Exception:
-        pass
-
-    return geom
-
+            if not fixed.is_empty: return fixed
+        except: pass
+    return geom.buffer(0)
 
 def extract_largest_polygon(geom):
-
-    if geom is None:
-        return None
-
-    if geom.is_empty:
-        return None
-
-    if isinstance(geom, Polygon):
-        return geom
-
-    if isinstance(geom, MultiPolygon):
-
-        return max(
-            geom.geoms,
-            key=lambda p: p.area
-        )
-
-    if isinstance(geom, GeometryCollection):
-
-        polygons = [
-            g for g in geom.geoms
-            if isinstance(g, Polygon)
-        ]
-
-        if polygons:
-            return max(
-                polygons,
-                key=lambda p: p.area
-            )
-
+    if geom is None or geom.is_empty: return None
+    if isinstance(geom, Polygon): return geom
+    if isinstance(geom, MultiPolygon): return max(geom.geoms, key=lambda p: p.area)
     return None
 
-
-# ============================================================
-# 7. CAD EDGE EXTRACTION
-# ============================================================
-
-def get_local_coordinates(
-    cq_edge,
-    plane_obj,
-    tolerance=0.02
-):
-
-    p_start = plane_obj.toLocalCoords(
-        cq_edge.startPoint()
-    )
-
-    p_end = plane_obj.toLocalCoords(
-        cq_edge.endPoint()
-    )
-
+def get_local_coordinates(cq_edge, plane_obj, tolerance=0.02):
+    p_start = plane_obj.toLocalCoords(cq_edge.startPoint())
+    p_end = plane_obj.toLocalCoords(cq_edge.endPoint())
     g_type = cq_edge.geomType()
-
     if g_type == "LINE":
-
-        return {
-            "type": "LINE",
-            "start": (
-                p_start.x,
-                p_start.y
-            ),
-            "end": (
-                p_end.x,
-                p_end.y
-            )
-        }
-
+        return {"type": "LINE", "start": (p_start.x, p_start.y), "end": (p_end.x, p_end.y)}
     elif g_type == "CIRCLE":
-
-        p_center = plane_obj.toLocalCoords(
-            cq_edge.Center()
-        )
-
-        return {
-            "type": "CIRCLE",
-            "center": (
-                p_center.x,
-                p_center.y
-            ),
-            "radius": cq_edge.radius()
-        }
-
+        p_center = plane_obj.toLocalCoords(cq_edge.Center())
+        return {"type": "CIRCLE", "center": (p_center.x, p_center.y), "radius": cq_edge.radius()}
     else:
-
         try:
-
             occ_curve = cq_edge.ToAdaptor3d()
-
-            first_param = occ_curve.FirstParameter()
-            last_param = occ_curve.LastParameter()
-
-            length_est = cq_edge.Length()
-
-            segments = max(
-                32,
-                min(
-                    512,
-                    int(
-                        length_est /
-                        math.sqrt(
-                            tolerance
-                            if tolerance > 0
-                            else 0.02
-                        )
-                    )
-                )
-            )
-
+            f_p, l_p = occ_curve.FirstParameter(), occ_curve.LastParameter()
             pts = []
-
-            for i in range(segments + 1):
-
-                t = (
-                    first_param
-                    +
-                    (last_param - first_param)
-                    *
-                    i
-                    /
-                    segments
-                )
-
-                p_loc = plane_obj.toLocalCoords(
-                    cq_edge.valueAt(t)
-                )
-
-                pts.append(
-                    (
-                        p_loc.x,
-                        p_loc.y
-                    )
-                )
-
-            return {
-                "type": "DISCRETE_CURVE",
-                "points": pts
-            }
-
-        except Exception:
-
-            return {
-                "type": "LINE",
-                "start": (
-                    p_start.x,
-                    p_start.y
-                ),
-                "end": (
-                    p_end.x,
-                    p_end.y
-                )
-            }
-
+            for i in range(65):
+                t = f_p + (l_p - f_p) * i / 64
+                p_loc = plane_obj.toLocalCoords(cq_edge.valueAt(t))
+                pts.append((p_loc.x, p_loc.y))
+            return {"type": "DISCRETE_CURVE", "points": pts}
+        except:
+            return {"type": "LINE", "start": (p_start.x, p_start.y), "end": (p_end.x, p_end.y)}
 
 def discrete_edges(edges):
-
     pts = []
-
     for edge in edges:
-
         if edge["type"] == "LINE":
-
-            pts.append(edge["start"])
-            pts.append(edge["end"])
-
+            pts.extend([edge["start"], edge["end"]])
         elif edge["type"] == "CIRCLE":
-
             cx, cy = edge["center"]
-            radius = edge["radius"]
-
-            for angle in np.linspace(
-                0,
-                360,
-                128,
-                endpoint=False
-            ):
-
-                rad = math.radians(angle)
-
-                pts.append(
-                    (
-                        cx
-                        +
-                        radius
-                        *
-                        math.cos(rad),
-
-                        cy
-                        +
-                        radius
-                        *
-                        math.sin(rad)
-                    )
-                )
-
+            for a in np.linspace(0, 360, 64, endpoint=False):
+                pts.append((cx + edge["radius"] * math.cos(math.radians(a)), cy + edge["radius"] * math.sin(math.radians(a))))
         elif edge["type"] == "DISCRETE_CURVE":
-
-            pts.extend(
-                edge["points"]
-            )
-
+            pts.extend(edge["points"])
     return pts
 
-
-def clean_polygon_points(
-    points,
-    tolerance=0.01
-):
-
-    if not points:
-        return []
-
+def clean_polygon_points(points):
     cleaned = []
-
     for p in points:
-
-        p = (
-            float(p[0]),
-            float(p[1])
-        )
-
-        if not cleaned:
-
-            cleaned.append(p)
-
-        else:
-
-            if not np.allclose(
-                cleaned[-1],
-                p,
-                atol=tolerance
-            ):
-
-                cleaned.append(p)
-
-    if len(cleaned) > 2:
-
-        if not np.allclose(
-            cleaned[0],
-            cleaned[-1],
-            atol=tolerance
-        ):
-
-            cleaned.append(
-                cleaned[0]
-            )
-
+        if not cleaned or not np.allclose(cleaned[-1], p, atol=0.01):
+            cleaned.append((float(p[0]), float(p[1])))
+    if len(cleaned) > 2 and not np.allclose(cleaned[0], cleaned[-1], atol=0.01):
+        cleaned.append(cleaned[0])
     return cleaned
 
-
-# ============================================================
-# 8. STEP ASSEMBLY EXPLODER
-# ============================================================
-
-def process_full_assembly_step(
-    file_bytes,
-    filename,
-    std_thickness,
-    tol_val
-):
-
+def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
     temp_path = None
     parsed_parts = []
-
     try:
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=os.path.splitext(filename)[1]
-        ) as temp_file:
-
-            temp_file.write(
-                file_bytes
-            )
-
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as temp_file:
+            temp_file.write(file_bytes)
             temp_path = temp_file.name
-
-        imported_shape = cq.importers.importStep(
-            temp_path
-        )
-
+        imported_shape = cq.importers.importStep(temp_path)
         solids = imported_shape.solids().vals()
-
-        if not solids:
-
-            raise ValueError(
-                "Không tìm thấy Solid hợp lệ trong STEP."
-            )
-
-        st.info(
-            f"🔎 Đã phát hiện "
-            f"**{len(solids)}** "
-            f"Solid trong assembly."
-        )
-
         for idx, solid in enumerate(solids):
-
-            # Loại bỏ chi tiết quá nhỏ
-            if solid.Area() < 500:
-                continue
-
+            if solid.Area() < 500: continue 
             faces = solid.faces().vals()
-
-            plane_faces = [
-                f
-                for f in faces
-                if f.geomType() == "PLANE"
-            ]
-
-            if not plane_faces:
-                continue
-
-            # Mặt lớn nhất
-            target_face = max(
-                plane_faces,
-                key=lambda f: f.Area()
-            )
-
+            plane_faces = [f for f in faces if f.geomType() == "PLANE"]
+            if not plane_faces: continue
+            target_face = max(plane_faces, key=lambda f: f.Area())
             face_center = target_face.Center()
-
-            face_normal = target_face.normalAt(
-                face_center
-            )
-
-            ref_plane = cq.Plane(
-                origin=face_center,
-                normal=face_normal
-            )
-
-            # OUTER CONTOUR
+            ref_plane = cq.Plane(origin=face_center, normal=target_face.normalAt(face_center))
+            
             outer_wire = target_face.outerWire()
-
-            outer_edges = [
-                get_local_coordinates(
-                    edge,
-                    ref_plane,
-                    tol_val
-                )
-                for edge in outer_wire.Edges()
-            ]
-
-            # FEATURES
+            outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
+            
             features = []
-
-            # INNER CUT / LỖ
             for inner_wire in target_face.innerWires():
-
-                wire_edges = [
-                    get_local_coordinates(
-                        edge,
-                        ref_plane,
-                        tol_val
-                    )
-                    for edge in inner_wire.Edges()
-                ]
-
-                features.append(
-                    {
-                        "type": "CNC_INNER_CUT",
-                        "edges": wire_edges,
-                        "depth": std_thickness
-                    }
-                )
-
-            # POCKET
-            pocket_signatures = set()
+                wire_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in inner_wire.Edges()]
+                features.append({"type": "CNC_INNER_CUT", "edges": wire_edges, "depth": std_thickness})
 
             for face in faces:
+                if face is target_face or face.geomType() != "PLANE": continue
+                local_center = ref_plane.toLocalCoords(face.Center())
+                depth = abs(local_center.z)
+                if 0.5 <= depth < (std_thickness + 2.0):
+                    p_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in face.outerWire().Edges()]
+                    if p_edges: features.append({"type": "CNC_POCKET", "edges": p_edges, "depth": depth})
 
-                if face is target_face:
-                    continue
-
-                if face.geomType() != "PLANE":
-                    continue
-
-                local_center = ref_plane.toLocalCoords(
-                    face.Center()
-                )
-
-                depth = abs(
-                    local_center.z
-                )
-
-                if (
-                    0.5
-                    <= depth
-                    <
-                    std_thickness + 2.0
-                ):
-
-                    p_edges = [
-                        get_local_coordinates(
-                            edge,
-                            ref_plane,
-                            tol_val
-                        )
-                        for edge in face.outerWire().Edges()
-                    ]
-
-                    if not p_edges:
-                        continue
-
-                    raw_p = clean_polygon_points(
-                        discrete_edges(
-                            p_edges
-                        )
-                    )
-
-                    if len(raw_p) < 4:
-                        continue
-
-                    try:
-
-                        poly = repair_geometry(
-                            Polygon(raw_p)
-                        )
-
-                        if poly is None:
-                            continue
-
-                        centroid = poly.centroid
-
-                        signature = (
-                            round(
-                                centroid.x,
-                                2
-                            ),
-                            round(
-                                centroid.y,
-                                2
-                            ),
-                            round(
-                                depth,
-                                1
-                            )
-                        )
-
-                        if signature in pocket_signatures:
-                            continue
-
-                        pocket_signatures.add(
-                            signature
-                        )
-
-                        features.append(
-                            {
-                                "type": "CNC_POCKET",
-                                "edges": p_edges,
-                                "depth": depth
-                            }
-                        )
-
-                    except Exception:
-                        continue
-
-            # BOUNDING BOX
-            raw_outer_pts = clean_polygon_points(
-                discrete_edges(
-                    outer_edges
-                )
-            )
-
-            if len(raw_outer_pts) < 4:
-                continue
-
-            poly_outer = repair_geometry(
-                Polygon(raw_outer_pts)
-            )
-
-            if (
-                poly_outer is None
-                or poly_outer.is_empty
-            ):
-                continue
-
-            min_x, min_y, max_x, max_y = (
-                poly_outer.bounds
-            )
-
-            width_local = max_x - min_x
-            height_local = max_y - min_y
-
-            parsed_parts.append(
-                {
-                    "name": f"Tam_Van_{idx + 1}",
-                    "width": width_local,
-                    "height": height_local,
-                    "outer_edges": outer_edges,
-                    "features": features,
-                    "origin_x": face_center.x,
-                    "origin_y": face_center.y
-                }
-            )
-
+            raw_outer_pts = clean_polygon_points(discrete_edges(outer_edges))
+            if len(raw_outer_pts) < 4: continue
+            poly_outer = repair_geometry(Polygon(raw_outer_pts))
+            if poly_outer is None or poly_outer.is_empty: continue
+            min_x, min_y, max_x, max_y = poly_outer.bounds
+            
+            parsed_parts.append({
+                "name": f"Tam_{idx+1}", "width": max_x - min_x, "height": max_y - min_y,
+                "outer_edges": outer_edges, "features": features, "origin_x": face_center.x, "origin_y": face_center.y
+            })
     finally:
-
-        if (
-            temp_path
-            and
-            os.path.exists(temp_path)
-        ):
-
-            os.remove(
-                temp_path
-            )
-
+        if temp_path and os.path.exists(temp_path): os.remove(temp_path)
     return parsed_parts
 
+def transform_point_production(x, y, dx, dy, angle, ox, oy):
+    x_l, y_l = x - ox, y - oy
+    rad = math.radians(angle)
+    return (x_l * math.cos(rad) - y_l * math.sin(rad) + dx, x_l * math.sin(rad) + y_l * math.cos(rad) + dy)
 
-# ============================================================
-# 9. TRANSFORMATION
-# ============================================================
-
-def transform_point_production(
-    x,
-    y,
-    dx,
-    dy,
-    angle,
-    ox,
-    oy
-):
-
-    x_local = x - ox
-    y_local = y - oy
-
-    rad = math.radians(
-        angle
-    )
-
-    cos_a = math.cos(
-        rad
-    )
-
-    sin_a = math.sin(
-        rad
-    )
-
-    return (
-        x_local * cos_a
-        -
-        y_local * sin_a
-        +
-        dx,
-
-        x_local * sin_a
-        +
-        y_local * cos_a
-        +
-        dy
-    )
-
-
-def transform_edge_production(
-    edge,
-    dx,
-    dy,
-    angle,
-    ox,
-    oy
-):
-
+def transform_edge_production(edge, dx, dy, angle, ox, oy):
     if edge["type"] == "LINE":
-
-        return {
-            "type": "LINE",
-            "start": transform_point_production(
-                edge["start"][0],
-                edge["start"][1],
-                dx,
-                dy,
-                angle,
-                ox,
-                oy
-            ),
-            "end": transform_point_production(
-                edge["end"][0],
-                edge["end"][1],
-                dx,
-                dy,
-                angle,
-                ox,
-                oy
-            )
-        }
-
+        return {"type": "LINE", "start": transform_point_production(edge["start"][0], edge["start"][1], dx, dy, angle, ox, oy), "end": transform_point_production(edge["end"][0], edge["end"][1], dx, dy, angle, ox, oy)}
     elif edge["type"] == "CIRCLE":
-
-        return {
-            "type": "CIRCLE",
-            "center": transform_point_production(
-                edge["center"][0],
-                edge["center"][1],
-                dx,
-                dy,
-                angle,
-                ox,
-                oy
-            ),
-            "radius": edge["radius"]
-        }
-
+        return {"type": "CIRCLE", "center": transform_point_production(edge["center"][0], edge["center"][1], dx, dy, angle, ox, oy), "radius": edge["radius"]}
     elif edge["type"] == "DISCRETE_CURVE":
-
-        return {
-            "type": "DISCRETE_CURVE",
-            "points": [
-                transform_point_production(
-                    x,
-                    y,
-                    dx,
-                    dy,
-                    angle,
-                    ox,
-                    oy
-                )
-                for x, y in edge["points"]
-            ]
-        }
-
+        return {"type": "DISCRETE_CURVE", "points": [transform_point_production(x, y, dx, dy, angle, ox, oy) for x, y in edge["points"]]}
     return edge
 
-
-def transform_edges_production(
-    edges,
-    dx,
-    dy,
-    angle,
-    ox,
-    oy
-):
-
-    return [
-        transform_edge_production(
-            edge,
-            dx,
-            dy,
-            angle,
-            ox,
-            oy
-        )
-        for edge in edges
-    ]
-
+def transform_edges_production(edges, dx, dy, angle, ox, oy):
+    return [transform_edge_production(e, dx, dy, angle, ox, oy) for e in edges]
 
 # ============================================================
-# 10. T-BONE RELIEF
+# NESTING ENGINE
 # ============================================================
-
-def apply_t_bone_relief(
-    polygon_points,
-    tool_radius
-):
-
-    if len(polygon_points) < 4:
-        return polygon_points
-
-    pts = list(
-        polygon_points
-    )
-
-    if np.allclose(
-        pts[0],
-        pts[-1]
-    ):
-
-        pts.pop()
-
-    poly = repair_geometry(
-        Polygon(pts)
-    )
-
-    if (
-        not isinstance(
-            poly,
-            Polygon
-        )
-        or
-        poly.is_empty
-    ):
-
-        return polygon_points
-
-    if not poly.exterior.is_ccw:
-
-        pts.reverse()
-
-    result = []
-
-    n = len(pts)
-
-    for i in range(n):
-
-        p_prev = np.array(
-            pts[i - 1],
-            dtype=float
-        )
-
-        p_curr = np.array(
-            pts[i],
-            dtype=float
-        )
-
-        p_next = np.array(
-            pts[
-                (i + 1) % n
-            ],
-            dtype=float
-        )
-
-        v1 = p_prev - p_curr
-        v2 = p_next - p_curr
-
-        len_v1 = np.linalg.norm(
-            v1
-        )
-
-        len_v2 = np.linalg.norm(
-            v2
-        )
-
-        if (
-            len_v1 < 1e-5
-            or
-            len_v2 < 1e-5
-        ):
-
-            result.append(
-                tuple(p_curr)
-            )
-
-            continue
-
-        v1_u = v1 / len_v1
-        v2_u = v2 / len_v2
-
-        dot = np.clip(
-            np.dot(
-                v1_u,
-                v2_u
-            ),
-            -1.0,
-            1.0
-        )
-
-        angle = math.acos(
-            dot
-        )
-
-        cross_z = (
-            v1_u[0]
-            *
-            v2_u[1]
-            -
-            v1_u[1]
-            *
-            v2_u[0]
-        )
-
-        is_concave = (
-            cross_z > 0.001
-        )
-
-        is_right_angle = (
-            abs(
-                angle
-                -
-                math.pi / 2
-            )
-            <
-            math.radians(10)
-        )
-
-        result.append(
-            tuple(p_curr)
-        )
-
-        if (
-            is_concave
-            and
-            is_right_angle
-        ):
-
-            bisector = (
-                v1_u
-                +
-                v2_u
-            )
-
-            norm_b = np.linalg.norm(
-                bisector
-            )
-
-            if norm_b > 1e-5:
-
-                bisector_u = (
-                    bisector
-                    /
-                    norm_b
-                )
-
-                relief_point = (
-                    p_curr
-                    +
-                    bisector_u
-                    *
-                    tool_radius
-                )
-
-                result.append(
-                    tuple(
-                        relief_point
-                    )
-                )
-
-                result.append(
-                    tuple(
-                        p_curr
-                    )
-                )
-
-    result.append(
-        result[0]
-    )
-
-    return result
-
-
-# ============================================================
-# 11. NESTING
-# ============================================================
-
-def execute_production_nesting(
-    parts_list,
-    sheet_w,
-    sheet_h,
-    offset_val,
-    margin_val
-):
-
-    sheet_bound = Polygon(
-        [
-            (
-                margin_val,
-                margin_val
-            ),
-
-            (
-                sheet_w - margin_val,
-                margin_val
-            ),
-
-            (
-                sheet_w - margin_val,
-                sheet_h - margin_val
-            ),
-
-            (
-                margin_val,
-                sheet_h - margin_val
-            )
-        ]
-    )
-
-    sorted_parts = sorted(
-        parts_list,
-        key=lambda x:
-        x["width"]
-        *
-        x["height"],
-        reverse=True
-    )
-
+def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_val):
+    sheet_bound = Polygon([(margin_val, margin_val), (sheet_w - margin_val, margin_val), (sheet_w - margin_val, sheet_h - margin_val), (margin_val, sheet_h - margin_val)])
+    sorted_parts = sorted(parts_list, key=lambda x: x["width"] * x["height"], reverse=True)
     sheets = []
-
     for part in sorted_parts:
-
-        raw_points = clean_polygon_points(
-            discrete_edges(
-                part["outer_edges"]
-            )
-        )
-
-        if len(raw_points) < 4:
-            continue
-
-        poly_geom = extract_largest_polygon(
-            repair_geometry(
-                Polygon(raw_points)
-            )
-        )
-
-        if poly_geom is None:
-            continue
-
-        buffered_poly = extract_largest_polygon(
-            repair_geometry(
-                poly_geom.buffer(
-                    offset_val,
-                    resolution=16,
-                    join_style=JOIN_STYLE.round
-                )
-            )
-        )
-
-        if buffered_poly is None:
-            continue
-
-        min_x, min_y, _, _ = (
-            buffered_poly.bounds
-        )
-
-        normalized_poly = translate(
-            buffered_poly,
-            xoff=-min_x,
-            yoff=-min_y
-        )
-
-        raw_normalized = translate(
-            poly_geom,
-            xoff=-min_x,
-            yoff=-min_y
-        )
-
+        raw_points = clean_polygon_points(discrete_edges(part["outer_edges"]))
+        poly_geom = extract_largest_polygon(repair_geometry(Polygon(raw_points)))
+        if poly_geom is None: continue
+        buffered_poly = extract_largest_polygon(repair_geometry(poly_geom.buffer(offset_val, resolution=8, join_style=JOIN_STYLE.round)))
+        if buffered_poly is None: continue
+        min_x, min_y, _, _ = buffered_poly.bounds
+        normalized_poly = translate(buffered_poly, xoff=-min_x, yoff=-min_y)
+        raw_normalized = translate(poly_geom, xoff=-min_x, yoff=-min_y)
         best_pos = None
         target_sheet_idx = -1
         best_score = float("inf")
-
         for sheet_idx, sheet_data in enumerate(sheets):
-
-            placed_union = sheet_data[
-                "placed_union_geom"
-            ]
-
-            anchors = [
-                (
-                    margin_val,
-                    margin_val
-                )
-            ]
-
-            for pb in sheet_data[
-                "placed_buffered_polygons"
-            ]:
-
+            placed_union = sheet_data["placed_union_geom"]
+            anchors = [(margin_val, margin_val)]
+            for pb in sheet_data["placed_buffered_polygons"]:
                 b = pb.bounds
-
-                anchors.extend(
-                    [
-                        (
-                            b[2],
-                            b[1]
-                        ),
-
-                        (
-                            b[0],
-                            b[3]
-                        ),
-
-                        (
-                            b[2],
-                            b[3]
-                        )
-                    ]
-                )
-
-            for angle in [
-                0,
-                90,
-                180,
-                270
-            ]:
-
-                rotated_poly = rotate(
-                    normalized_poly,
-                    angle,
-                    origin=(0, 0)
-                )
-
-                r_min_x, r_min_y, _, _ = (
-                    rotated_poly.bounds
-                )
-
+                anchors.extend([(b[2], b[1]), (b[0], b[3]), (b[2], b[3])])
+            for angle in [0, 90, 180, 270]:
+                rotated_poly = rotate(normalized_poly, angle, origin=(0, 0))
+                r_min_x, r_min_y, _, _ = rotated_poly.bounds
                 for anchor_x, anchor_y in anchors:
-
-                    dx = (
-                        anchor_x
-                        -
-                        r_min_x
-                    )
-
-                    dy = (
-                        anchor_y
-                        -
-                        r_min_y
-                    )
-
-                    candidate = translate(
-                        rotated_poly,
-                        xoff=dx,
-                        yoff=dy
-                    )
-
-                    if not sheet_bound.covers(
-                        candidate
-                    ):
-
-                        continue
-
-                    if (
-                        placed_union is not None
-                        and
-                        candidate.intersects(
-                            placed_union
-                        )
-                    ):
-
-                        continue
-
-                    bounds = candidate.bounds
-
-                    score = (
-                        bounds[0]
-                        +
-                        bounds[1]
-                        *
-                        2.5
-                    )
-
+                    dx, dy = anchor_x - r_min_x, anchor_y - r_min_y
+                    candidate = translate(rotated_poly, xoff=dx, yoff=dy)
+                    if not sheet_bound.covers(candidate): continue
+                    if placed_union is not None and candidate.intersects(placed_union): continue
+                    score = candidate.bounds[0] + candidate.bounds[1] * 2.5
                     if score < best_score:
-
                         best_score = score
-
                         target_sheet_idx = sheet_idx
-
-                        best_pos = {
-                            "dx": dx,
-                            "dy": dy,
-                            "angle": angle,
-                            "cand_poly": candidate,
-                            "raw_trans": translate(
-                                rotate(
-                                    raw_normalized,
-                                    angle,
-                                    origin=(0, 0)
-                                ),
-                                xoff=dx,
-                                yoff=dy
-                            )
-                        }
-
-        if (
-            best_pos is not None
-            and
-            target_sheet_idx >= 0
-        ):
-
-            sheets[
-                target_sheet_idx
-            ][
-                "parts"
-            ].append(
-                {
-                    "part_ref": part,
-                    "original_offset": (
-                        min_x,
-                        min_y
-                    ),
-                    "placed_polygon":
-                    best_pos[
-                        "raw_trans"
-                    ],
-                    "dx":
-                    best_pos[
-                        "dx"
-                    ],
-                    "dy":
-                    best_pos[
-                        "dy"
-                    ],
-                    "angle":
-                    best_pos[
-                        "angle"
-                    ]
-                }
-            )
-
-            sheets[
-                target_sheet_idx
-            ][
-                "placed_buffered_polygons"
-            ].append(
-                best_pos[
-                    "cand_poly"
-                ]
-            )
-
-            sheets[
-                target_sheet_idx
-            ][
-                "placed_union_geom"
-            ] = (
-                sheets[
-                    target_sheet_idx
-                ][
-                    "placed_union_geom"
-                ]
-                .union(
-                    best_pos[
-                        "cand_poly"
-                    ]
-                )
-            )
-
+                        best_pos = {"dx": dx, "dy": dy, "angle": angle, "cand_poly": candidate, "raw_trans": translate(rotate(raw_normalized, angle, origin=(0, 0)), xoff=dx, yoff=dy)}
+        if best_pos is not None and target_sheet_idx >= 0:
+            sheets[target_sheet_idx]["parts"].append({"part_ref": part, "original_offset": (min_x, min_y), "placed_polygon": best_pos["raw_trans"], "dx": best_pos["dx"], "dy": best_pos["dy"], "angle": best_pos["angle"]})
+            sheets[target_sheet_idx]["placed_buffered_polygons"].append(best_pos["cand_poly"])
+            sheets[target_sheet_idx]["placed_union_geom"] = sheets[target_sheet_idx]["placed_union_geom"].union(best_pos["cand_poly"])
         else:
-
-            new_sheet_id = (
-                len(sheets)
-                +
-                1
-            )
-
-            dx = (
-                margin_val
-                -
-                min_x
-            )
-
-            dy = (
-                margin_val
-                -
-                min_y
-            )
-
-            init_poly = translate(
-                normalized_poly,
-                xoff=dx,
-                yoff=dy
-            )
-
-            sheets.append(
-                {
-                    "sheet_id":
-                    new_sheet_id,
-
-                    "parts":
-                    [
-                        {
-                            "part_ref": part,
-                            "original_offset": (
-                                min_x,
-                                min_y
-                            ),
-                            "placed_polygon": translate(
-                                raw_normalized,
-                                xoff=dx,
-                                yoff=dy
-                            ),
-                            "dx": dx,
-                            "dy": dy,
-                            "angle": 0
-                        }
-                    ],
-
-                    "placed_buffered_polygons": [
-                        init_poly
-                    ],
-
-                    "placed_union_geom": init_poly
-                }
-            )
-
+            dx, dy = margin_val - min_x, margin_val - min_y
+            init_poly = translate(normalized_poly, xoff=dx, yoff=dy)
+            sheets.append({"sheet_id": len(sheets) + 1, "parts": [{"part_ref": part, "original_offset": (min_x, min_y), "placed_polygon": translate(raw_normalized, xoff=dx, yoff=dy), "dx": dx, "dy": dy, "angle": 0}], "placed_buffered_polygons": [init_poly], "placed_union_geom": init_poly})
     return sheets
+
+# ============================================================
+# TOOLPATH GENERATION WITH TARGETED TOOL RADIUS
+# ============================================================
+def get_true_offset_toolpath(edges, op_type, tool_radius):
+    raw_pts = discrete_edges(edges)
+    cleaned = clean_polygon_points(raw_pts)
+    if len(cleaned) < 4: return []
+    poly = extract_largest_polygon(repair_geometry(Polygon(cleaned)))
+    if poly is None: return []
+
+    if op_type == "CNC_OUTER_CUT":
+        offset_geom = repair_geometry(poly.buffer(tool_radius, resolution=8, join_style=JOIN_STYLE.round))
+        return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
+    elif op_type == "CNC_INNER_CUT":
+        offset_geom = repair_geometry(poly.buffer(-tool_radius, resolution=8, join_style=JOIN_STYLE.round))
+        return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
+    elif op_type == "CNC_POCKET":
+        paths = []
+        stepover = tool_radius * 0.75
+        current_offset = -tool_radius
+        while True:
+            offset_geom = repair_geometry(poly.buffer(current_offset, resolution=8, join_style=JOIN_STYLE.round))
+            if offset_geom is None or offset_geom.is_empty: break
+            if isinstance(offset_geom, Polygon): paths.append(list(offset_geom.exterior.coords))
+            current_offset -= stepover
+        return paths
+    return []
+
+# ============================================================
+# NEW ATC G-CODE ENGINE (TỰ ĐỘNG PHÂN LỚP VÀ CHÈN LỆNH THAY DAO)
+# ============================================================
+def generate_gcode_for_toolpath(toolpath_pts, target_z, max_step, feed, plunge, safe_z):
+    gcode = []
+    if len(toolpath_pts) < 2: return gcode
+    pts = list(toolpath_pts)
+    start_pt = pts[0]
+    
+    gcode.append(f"G0 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} Z{safe_z:.3f}")
+    
+    z_targets = []
+    curr_z = 0.0
+    while curr_z > -target_z:
+        curr_z -= max_step
+        if curr_z < -target_z: curr_z = -target_z
+        z_targets.append(curr_z)
+
+    for tz in z_targets:
+        gcode.append(f"G1 Z{tz:.3f} F{plunge}")
+        for p in pts[1:]:
+            gcode.append(f"G1 X{p[0]:.3f} Y{p[1]:.3f} F{feed}")
+    gcode.append(f"G0 Z{safe_z:.3f}")
+    return gcode
+
+# ============================================================
+# MAIN APP ORCHESTRATION
+# ============================================================
+uploaded_files = st.file_uploader("Tải lên bản vẽ thiết kế 3D (.STEP / .STP)", accept_multiple_files=True)
+
+if uploaded_files:
+    all_extracted_parts = []
+    for f in uploaded_files:
+        with st.spinner(f"🚀 Đang phân rã khối 3D: {f.name}"):
+            parts = process_full_assembly_step(f.getvalue(), f.name, sheet_thickness, chord_tolerance)
+            all_extracted_parts.extend(parts)
+
+    if all_extracted_parts:
+        nested_sheets = execute_production_nesting(all_extracted_parts, sheet_W, sheet_H, total_offset, margin)
+
+        for sheet in nested_sheets:
+            st.write(f"### 📋 Sơ đồ cắt & Cấu hình đài dao Tấm #{sheet['sheet_id']}")
+            
+            # Khởi tạo các mảng G-code phân lớp nhiệm vụ
+            pocket_gcode_layer = []
+            inner_gcode_layer = []
+            outer_gcode_layer = []
+
+            # QUÉT TOÀN BỘ CHI TIẾT TRÊN TẤM VÁN ĐỂ GOM NHÓM THEO THỨ TỰ CÔNG NGHỆ GIA CÔNG
+            for placed in sheet["parts"]:
+                ref = placed["part_ref"]
+                
+                # LỚP 1: Gom Tác vụ Hạ Nền (Sử dụng Dao 3)
+                for feat in [f for f in ref["features"] if f["type"] == "CNC_POCKET"]:
+                    t_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
+                    paths = get_true_offset_toolpath(t_edges, "CNC_POCKET", TOOLS_CONFIG["CNC_POCKET"]["radius"])
+                    for p in paths:
+                        pocket_gcode_layer.extend(generate_gcode_for_toolpath(p, feat["depth"], max_stepdown, TOOLS_CONFIG["CNC_POCKET"]["feed"], t1_plunge, safe_Z))
+
+                # LỚP 2: Gom Tác vụ Khoét Lỗ Thủng (Sử dụng Dao 2)
+                for feat in [f for f in ref["features"] if f["type"] == "CNC_INNER_CUT"]:
+                    t_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
+                    paths = get_true_offset_toolpath(t_edges, "CNC_INNER_CUT", TOOLS_CONFIG["CNC_INNER_CUT"]["radius"])
+                    for p in paths:
+                        inner_gcode_layer.extend(generate_gcode_for_toolpath(p, sheet_thickness + thru_overlap, max_stepdown, TOOLS_CONFIG["CNC_INNER_CUT"]["feed"], t1_plunge, safe_Z))
+
+                # LỚP 3: Gom Tác vụ Cắt Đứt Biên Dạng (Sử dụng Dao 1)
+                trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
+                outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", TOOLS_CONFIG["CNC_OUTER_CUT"]["radius"])
+                for p in outer_paths:
+                    outer_gcode_layer.extend(generate_gcode_for_toolpath(p, sheet_thickness + thru_overlap, max_stepdown, TOOLS_CONFIG["CNC_OUTER_CUT"]["feed"], t1_plunge, safe_Z))
+
+            # COMPINE HÀO TRÌNH G-CODE TOÀN DIỆN VÀ CHÈN ATC TỰ ĐỘNG
+            final_gcode = [
+                "%", "G90 G21 G17 G40 G49 G80", f"G0 Z{safe_Z:.3f}"
+            ]
+
+            # Thực thi Lớp 1 (Nếu có tác vụ hạ nền) -> Gọi dao T3
+            if pocket_gcode_layer:
+                final_gcode.append(f"; >>> BẮT ĐẦU TÁC VỤ HẠ NỀN - GỌI DAO T{TOOLS_CONFIG['CNC_POCKET']['slot']} <<<")
+                final_gcode.append(f"T{TOOLS_CONFIG['CNC_POCKET']['slot']} M6") # Lệnh Thay dao tự động ATC
+                final_gcode.append(f"G43 H{TOOLS_CONFIG['CNC_POCKET']['slot']} Z{safe_Z:.3f}")
+                final_gcode.append(f"S{int(t1_spindle)} M3")
+                final_gcode.extend(pocket_gcode_layer)
+                final_gcode.append("M5") # Dừng trục chính trước khi đổi dao
+
+            # Thực thi Lớp 2 (Nếu có tác vụ cắt thủng) -> Gọi dao T2
+            if inner_gcode_layer:
+                final_gcode.append(f"; >>> BẮT ĐẦU TÁC VỤ CẮT LỖ THỦNG - GỌI DAO T{TOOLS_CONFIG['CNC_INNER_CUT']['slot']} <<<")
+                final_gcode.append(f"T{TOOLS_CONFIG['CNC_INNER_CUT']['slot']} M6") # Lệnh Thay dao tự động ATC
+                final_gcode.append(f"G43 H{TOOLS_CONFIG['CNC_INNER_CUT']['slot']} Z{safe_Z:.3f}")
+                final_gcode.append(f"S{int(t1_spindle)} M3")
+                final_gcode.extend(inner_gcode_layer)
+                final_gcode.append("M5")
+
+            # Thực thi Lớp 3 (Luôn có: Cắt đứt phôi) -> Gọi dao T1
+            if outer_gcode_layer:
+                final_gcode.append(f"; >>> BẮT ĐẦU TÁC VỤ CẮT ĐỨT BIÊN DẠNG - GỌI DAO T{TOOLS_CONFIG['CNC_OUTER_CUT']['slot']} <<<")
+                final_gcode.append(f"T{TOOLS_CONFIG['CNC_OUTER_CUT']['slot']} M6") # Lệnh Thay dao tự động ATC
+                final_gcode.append(f"G43 H{TOOLS_CONFIG['CNC_OUTER_CUT']['slot']} Z{safe_Z:.3f}")
+                final_gcode.append(f"S{int(t1_spindle)} M3")
+                final_gcode.extend(outer_gcode_layer)
+                final_gcode.append("M5")
+
+            final_gcode.extend(["G0 Z50.000", "G28 G91 X0 Y0", "M30", "%"])
+
+            # Render đồ họa minh họa sơ đồ (giản lược để tối ưu hiển thị)
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.set_xlim(0, sheet_W)
+            ax.set_ylim(0, sheet_H)
+            ax.add_patch(mpatches.Rectangle((0,0), sheet_W, sheet_H, color="grey", alpha=0.2))
+            for placed in sheet["parts"]:
+                x, y = placed["placed_polygon"].exterior.xy
+                ax.plot(x, y, "b-")
+            st.pyplot(fig)
+            plt.close(fig)
+
+            st.download_button(
+                label=f"💾 Tải xuống G-Code ATC Tấm #{sheet['sheet_id']}",
+                data="\n".join(final_gcode),
+                file_name=f"ATC_Production_Sheet_{sheet['sheet_id']}.nc",
+                mime="text/plain"
+            )
