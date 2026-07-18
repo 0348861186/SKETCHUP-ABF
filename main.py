@@ -178,7 +178,7 @@ def clean_polygon_points(points, tolerance=0.01):
     return cleaned
 
 # ============================================================
-# 5. ASSEMBLY EXPLODER (ĐÃ SỬA LỖI TƯƠNG THÍCH CADQUERY API)
+# 5. ASSEMBLY EXPLODER (ĐÃ SỬA ĐÚNG API SYNTAX CADQUERY)
 # ============================================================
 def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
     temp_path = None
@@ -189,8 +189,8 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_file.write(file_bytes)
             temp_path = temp_file.name
 
-        # Đọc trực tiếp file STEP thành một đối tượng Compound chuẩn của CadQuery
-        compound_shape = cq.Compound.importStep(temp_path)
+        # Sử dụng đúng phương thức có dấu gạch dưới của CadQuery để nạp file
+        compound_shape = cq.Compound.import_step(temp_path)
         
         # Trích xuất toàn bộ danh sách khối Solids bên trong
         raw_solids = compound_shape.Solids()
