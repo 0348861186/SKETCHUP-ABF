@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.patches mpatches
+import matplotlib.patches as mpatches
 
 # ============================================================
 # CAD / CAM INDUSTRIAL CORE
