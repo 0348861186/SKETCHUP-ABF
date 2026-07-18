@@ -28,13 +28,13 @@ except ImportError:
 # 1. STREAMLIT CONFIGURATION
 # ============================================================
 st.set_page_config(
-    page_title="Production-Ready CNC CAM Engine Pro v6.0",
+    page_title="Production-Ready CNC CAM Engine Pro v7.0",
     layout="wide"
 )
 st.markdown(
     """
-    ## 🏭 CNC CAM ENGINE PRO V6.0 - AUTOMATIC ASSEMBLY EXPLODER
-    **Hệ thống tự động bóc tách cụm tủ 3D | Hạ phẳng chi tiết | Nesting tối ưu | Xuất G-Code gom nhóm Layer**
+    ## 🏭 CNC CAM ENGINE PRO V7.0 - MULTI-TOOL & LAYER SEPARATION
+    **Hệ thống tự động bóc tách | Hạ phẳng | Nesting | Xuất G-Code tách biệt Layer & Dao cắt riêng biệt (M6/M0)**
     """,
     unsafe_allow_html=True
 )
@@ -50,15 +50,33 @@ margin = st.sidebar.number_input("Khoảng cách biên tấm ván (mm)", min_val
 safety_spacing = st.sidebar.number_input("Khoảng cách giữa các chi tiết (mm)", min_value=0.0, value=6.0, step=0.5)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔧 CẤU HÌNH DAO & CẮT G-CODE")
-t1_dia = st.sidebar.number_input("Đường kính dao T1 (mm)", min_value=0.1, value=6.0, step=0.1)
-t1_feed = st.sidebar.number_input("Tốc độ cắt F (mm/min)", min_value=100, value=3500, step=100)
-t1_plunge = st.sidebar.number_input("Tốc độ đâm dao F_plunge (mm/min)", min_value=50, value=1200, step=50)
-t1_spindle = st.sidebar.number_input("Tốc độ trục chính S (RPM)", min_value=1000, value=18000, step=500)
-max_stepdown = st.sidebar.number_input("Chiều sâu mỗi lớp Stepdown (mm)", min_value=0.5, value=6.0, step=0.5)
+st.sidebar.header("🔧 CẤU HÌNH DAO CHO TỪNG LAYER")
 
-st.sidebar.markdown("### 🔩 ĐỘ MỊN & AN TOÀN NÂNG CẤP")
-chord_tolerance = st.sidebar.number_input("Dung sai dây cung - Độ mịn spline (mm)", min_value=0.005, max_value=0.5, value=0.02, step=0.005, format="%.3f")
+# Cấu hình Dao 1 - Pocket
+st.sidebar.markdown("#### 🔹 Dao T1: Gia công túi/hèm (CNC_POCKET)")
+t1_dia = st.sidebar.number_input("Đường kính T1 (mm)", min_value=0.1, value=6.0, step=0.1, key="t1_d")
+t1_feed = st.sidebar.number_input("Tốc độ cắt F - T1 (mm/min)", min_value=100, value=3000, step=100, key="t1_f")
+t1_plunge = st.sidebar.number_input("Tốc độ đâm F_plunge - T1 (mm/min)", min_value=50, value=1000, step=50, key="t1_p")
+t1_spindle = st.sidebar.number_input("Tốc độ trục S - T1 (RPM)", min_value=1000, value=18000, step=500, key="t1_s")
+
+# Cấu hình Dao 2 - Inner Cut
+st.sidebar.markdown("#### 🔸 Dao T2: Cắt lỗ khoét trong (CNC_INNER_CUT)")
+t2_dia = st.sidebar.number_input("Đường kính T2 (mm)", min_value=0.1, value=4.0, step=0.1, key="t2_d")
+t2_feed = st.sidebar.number_input("Tốc độ cắt F - T2 (mm/min)", min_value=100, value=2500, step=100, key="t2_f")
+t2_plunge = st.sidebar.number_input("Tốc độ đâm F_plunge - T2 (mm/min)", min_value=50, value=1000, step=50, key="t2_p")
+t2_spindle = st.sidebar.number_input("Tốc độ trục S - T2 (RPM)", min_value=1000, value=18000, step=500, key="t2_s")
+
+# Cấu hình Dao 3 - Outer Cut
+st.sidebar.markdown("#### 🔺 Dao T3: Cắt đứt đường viền ngoài (CNC_OUTER_CUT)")
+t3_dia = st.sidebar.number_input("Đường kính T3 (mm)", min_value=0.1, value=6.0, step=0.1, key="t3_d")
+t3_feed = st.sidebar.number_input("Tốc độ cắt F - T3 (mm/min)", min_value=100, value=3500, step=100, key="t3_f")
+t3_plunge = st.sidebar.number_input("Tốc độ đâm F_plunge - T3 (mm/min)", min_value=50, value=1200, step=50, key="t3_p")
+t3_spindle = st.sidebar.number_input("Tốc độ trục S - T3 (RPM)", min_value=1000, value=18000, step=500, key="t3_s")
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ THÔNG SỐ VẬN HÀNH CHUNG")
+max_stepdown = st.sidebar.number_input("Chiều sâu mỗi lớp Stepdown (mm)", min_value=0.5, value=6.0, step=0.5)
+chord_tolerance = st.sidebar.number_input("Dung sai dây cung (mm)", min_value=0.005, max_value=0.5, value=0.02, step=0.005, format="%.3f")
 enable_leadin = st.sidebar.checkbox("Kích hoạt Lead-in an toàn", value=True)
 leadin_length = st.sidebar.number_input("Chiều dài Lead-in (mm)", min_value=2.0, value=5.0, step=0.5)
 enable_ramping = st.sidebar.checkbox("Kích hoạt Continuous Spiral Ramp", value=True)
@@ -72,8 +90,9 @@ cnc_dialect = st.sidebar.selectbox("Hệ điều hành / Phần mềm máy CNC",
 safe_Z = st.sidebar.number_input("Safe Z (mm)", min_value=1.0, value=25.0, step=1.0)
 thru_overlap = st.sidebar.number_input("Độ sâu cắt xuyên thêm (mm)", min_value=0.0, value=0.5, step=0.1)
 
-tool_radius = t1_dia / 2.0
-total_offset = tool_radius + safety_spacing
+# Tính toán khoảng cách tối ưu dựa trên đường kính dao lớn nhất để tránh va chạm khi nesting
+max_tool_radius = max(t1_dia, t2_dia, t3_dia) / 2.0
+total_offset = max_tool_radius + safety_spacing
 
 # ============================================================
 # 3. GEOMETRY REPAIR
@@ -159,7 +178,7 @@ def clean_polygon_points(points, tolerance=0.01):
     return cleaned
 
 # ============================================================
-# 5. NEW DETAILED ADVANCED ASSEMBLY EXPLODER (TỰ PHÂN RÃ CỤM 3D)
+# 5. ASSEMBLY EXPLODER
 # ============================================================
 def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
     temp_path = None
@@ -179,7 +198,7 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
 
         for idx, solid in enumerate(solids):
             if solid.Area() < 500: 
-                continue 
+                return parsed_parts
 
             faces = solid.faces().vals()
             plane_faces = [f for f in faces if f.geomType() == "PLANE"]
@@ -442,7 +461,7 @@ def build_tab_ranges(pts, tab_width, tab_count):
         tab_ranges.append((max(0.0, center - tab_width / 2), min(total_len, center + tab_width / 2)))
     return tab_ranges
 
-def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, feed, plunge, spindle, safe_z, enable_leadin, leadin_length, enable_ramping, enable_tabs, tab_width, tab_thick, tab_count, dialect):
+def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, feed, plunge, safe_z, enable_leadin, leadin_length, enable_ramping, enable_tabs, tab_width, tab_thick, tab_count):
     gcode = []
     if len(toolpath_pts) < 2: return gcode
     pts = list(toolpath_pts)
@@ -503,17 +522,45 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
     gcode.append(f"G0 Z{safe_z:.3f}")
     return gcode
 
-def generate_program_header(dialect, spindle, safe_z):
+def generate_program_header(dialect):
     if dialect in ["Fanuc / Syntec", "Weihong"]:
-        return ["%", "G90 G21 G17 G40 G49 G80", "T1 M6", f"G43 H1 Z{safe_z:.3f}", f"S{int(spindle)} M3"]
-    return ["G90", "G21", "G17", f"M3 S{int(spindle)}", f"G0 Z{safe_z:.3f}"]
+        return ["%", "G90 G21 G17 G40 G49 G80"]
+    return ["G90", "G21", "G17"]
 
-def generate_program_footer(dialect):
-    if dialect in ["Fanuc / Syntec", "Weihong"]: return ["M5", "G49", "G0 Z25.000", "M30", "%"]
-    return ["M5", "M30"]
+def generate_tool_change_block(dialect, tool_number, spindle_speed, safe_z):
+    """
+    Tạo cấu trúc dừng trục chính, nhấc dao an toàn, thay dao cơ học M6 và tạm dừng máy M0 cho từng Layer
+    """
+    block = [
+        "",
+        "; ----------------------------------------------",
+        f"; TÁC VỤ: THAY DAO -> THỰC HIỆN DAO T{tool_number}",
+        "; ----------------------------------------------",
+        "M5",                    # Tắt trục chính trước khi đổi
+        f"G0 Z{safe_z:.3f}",     # Nhấc dao lên cao an toàn tuyệt đối
+    ]
+    if dialect in ["Fanuc / Syntec", "Weihong"]:
+        block.extend([
+            f"T{tool_number} M6",           # Gọi đài dao / Dừng thay dao cơ học
+            f"G43 H{tool_number} Z{safe_z:.3f}", # Bù trừ chiều dài hình học dao tương ứng
+            f"S{int(spindle_speed)} M3",     # Quay lại trục chính với tốc độ cấu hình mới
+            "M0"                             # Lệnh dừng chương trình tạm thời (Chờ người vận hành xác nhận)
+        ])
+    else:
+        block.extend([
+            f"T{tool_number} M6",
+            f"M3 S{int(spindle_speed)}",
+            "M0"
+        ])
+    return block
+
+def generate_program_footer(dialect, safe_z):
+    if dialect in ["Fanuc / Syntec", "Weihong"]: 
+        return ["M5", "G49", f"G0 Z{safe_z:.3f}", "M30", "%"]
+    return ["M5", f"G0 Z{safe_z:.3f}", "M30"]
 
 # ============================================================
-# 9. MAIN APP ORCHESTRATION (UPGRADED: GROUPED TO CHOSEN LAYER)
+# 9. MAIN APP ORCHESTRATION
 # ============================================================
 uploaded_files = st.file_uploader("Tải lên bản vẽ thiết kế 3D toàn bộ khối tủ (.STEP / .STP)", accept_multiple_files=True, type=["step", "stp"])
 
@@ -541,72 +588,114 @@ if uploaded_files:
             ax.add_patch(mpatches.Rectangle((0, 0), sheet_W, sheet_H, color="darkgrey", alpha=0.3, label="Khổ ván gốc"))
             ax.add_patch(mpatches.Rectangle((margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, fill=False, linestyle="--", color="red"))
             
-            # Khởi tạo Header chương trình máy CNC
-            all_gcode_blocks = generate_program_header(cnc_dialect, t1_spindle, safe_Z)
+            # Khởi tạo Header chương trình chung
+            all_gcode_blocks = generate_program_header(cnc_dialect)
 
-            # Các danh sách gom nhóm Layer tác vụ trên phạm vi toàn tấm phôi
-            inner_features_todo = []
-            outer_cuts_todo = []
+            # Tách biệt hoàn toàn 3 mảng tác vụ độc lập tương ứng với 3 Layer hình học
+            layer_pockets_todo = []
+            layer_inners_todo = []
+            layer_outers_todo = []
 
-            # Bước 1: Quét toàn bộ chi tiết phân bố trên tấm để vẽ bản mô phỏng và lưu đường dao thô
+            # Bước 1: Quét hệ tọa độ phẳng xếp tấm, bóc tách và phân phối chính xác vào từng Layer
             for p_idx, placed in enumerate(sheet["parts"]):
                 ref = placed["part_ref"]
                 poly = placed["placed_polygon"]
                 
-                # Vẽ render chi tiết
+                # Vẽ render mô phỏng chi tiết
                 x, y = poly.exterior.xy
                 ax.plot(x, y, "b-", linewidth=2)
                 ax.fill(x, y, "skyblue", alpha=0.5)
                 ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=8, weight='bold')
 
-                # Chuyển đổi hệ tọa độ & tính toán Toolpath đứt viền ngoài (Outer Cut)
+                # LAYER 3 - OUTER CUT (Đường Contour ngoài)
                 trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
-                outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", tool_radius)
+                outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", t3_dia / 2.0)
                 for path in outer_paths:
                     if len(path) >= 2:
-                        outer_cuts_todo.append(path)
+                        layer_outers_todo.append(path)
 
-                # Chuyển đổi hệ tọa độ & tính toán Toolpath lỗ khoét/rãnh hèm (Inner Cut / Pocket)
+                # PHÂN TÁCH TRIỆT ĐỂ: Duyệt qua các feature trong lòng để chia đúng vào Pocket hoặc Inner Cut
                 for feat in ref["features"]:
                     trans_feat_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
-                    feat_paths = get_true_offset_toolpath(trans_feat_edges, feat["type"], tool_radius)
-                    for path in feat_paths:
-                        if len(path) >= 2:
-                            inner_features_todo.append({"path": path, "type": feat["type"], "depth": feat["depth"]})
+                    
+                    if feat["type"] == "CNC_POCKET":
+                        # Cắt hèm/túi dùng đường kính dao T1
+                        pocket_paths = get_true_offset_toolpath(trans_feat_edges, "CNC_POCKET", t1_dia / 2.0)
+                        for path in pocket_paths:
+                            if len(path) >= 2:
+                                layer_pockets_todo.append({"path": path, "depth": feat["depth"]})
+                                
+                    elif feat["type"] == "CNC_INNER_CUT":
+                        # Cắt lỗ khoét thủng dùng đường kính dao T2
+                        inner_paths = get_true_offset_toolpath(trans_feat_edges, "CNC_INNER_CUT", t2_dia / 2.0)
+                        for path in inner_paths:
+                            if len(path) >= 2:
+                                layer_inners_todo.append({"path": path, "depth": feat["depth"]})
 
-            # Bước 2: Xuất khối lệnh cho LAYER 1 - GIA CÔNG TOÀN BỘ CÁC CHI TIẾT TRONG (Ưu tiên số 1)
-            if inner_features_todo:
-                all_gcode_blocks.append("\n; ==============================================")
-                all_gcode_blocks.append("; LAYER 1: PROCESSING ALL INNER HOLES & POCKETS")
+            # =========================================================================
+            # XUẤT LAYER 1: CNC_POCKET (Sử dụng Dao T1)
+            # =========================================================================
+            if layer_pockets_todo:
+                # Chèn khối mã lệnh thay dao T1 tự động + Dừng chương trình
+                all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=1, spindle_speed=t1_spindle, safe_z=safe_Z))
                 all_gcode_blocks.append("; ==============================================")
-                for item in inner_features_todo:
+                all_gcode_blocks.append("; LAYER 1: CNC_POCKET OPERATIONS (TOOL T1)")
+                all_gcode_blocks.append("; ==============================================")
+                
+                for item in layer_pockets_todo:
                     path = item["path"]
                     px, py = zip(*path)
-                    ax.plot(px, py, "m:", alpha=0.7) # Vẽ nét phụ màu hồng trên đồ thị
+                    ax.plot(px, py, "m:", alpha=0.7) # Vẽ nét đứt màu hồng trên đồ thị biểu diễn Pocket
                     
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
-                        path, item["type"], item["depth"], max_stepdown,
-                        t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
-                        enable_ramping, False, tab_width, tab_thickness, tab_count_default, cnc_dialect
+                        path, "CNC_POCKET", item["depth"], max_stepdown,
+                        t1_feed, t1_plunge, safe_Z, enable_leadin, leadin_length,
+                        enable_ramping, False, tab_width, tab_thickness, tab_count_default
                     ))
 
-            # Bước 3: Xuất khối lệnh cho LAYER 2 - CẮT ĐỨT TOÀN BỘ ĐƯỜNG CONTOUR NGOÀI (Thực hiện sau cùng)
-            if outer_cuts_todo:
-                all_gcode_blocks.append("\n; ==============================================")
-                all_gcode_blocks.append("; LAYER 2: CUTTING ALL OUTER CONTOURS (FINAL)")
+            # =========================================================================
+            # XUẤT LAYER 2: CNC_INNER_CUT (Sử dụng Dao T2)
+            # =========================================================================
+            if layer_inners_todo:
+                # Chèn khối mã lệnh thay dao T2 tự động + Dừng chương trình
+                all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=2, spindle_speed=t2_spindle, safe_z=safe_Z))
                 all_gcode_blocks.append("; ==============================================")
-                for path in outer_cuts_todo:
+                all_gcode_blocks.append("; LAYER 2: CNC_INNER_CUT OPERATIONS (TOOL T2)")
+                all_gcode_blocks.append("; ==============================================")
+                
+                for item in layer_inners_todo:
+                    path = item["path"]
                     px, py = zip(*path)
-                    ax.plot(px, py, "g--", alpha=0.8) # Vẽ nét phụ màu xanh lá trên đồ thị
+                    ax.plot(px, py, "c-.", alpha=0.8) # Vẽ nét gạch chấm xanh cyan biểu diễn Inner Cut
+                    
+                    all_gcode_blocks.extend(generate_gcode_for_toolpath(
+                        path, "CNC_INNER_CUT", item["depth"], max_stepdown,
+                        t2_feed, t2_plunge, safe_Z, enable_leadin, leadin_length,
+                        enable_ramping, False, tab_width, tab_thickness, tab_count_default
+                    ))
+
+            # =========================================================================
+            # XUẤT LAYER 3: CNC_OUTER_CUT (Sử dụng Dao T3)
+            # =========================================================================
+            if layer_outers_todo:
+                # Chèn khối mã lệnh thay dao T3 tự động + Dừng chương trình
+                all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=3, spindle_speed=t3_spindle, safe_z=safe_Z))
+                all_gcode_blocks.append("; ==============================================")
+                all_gcode_blocks.append("; LAYER 3: CNC_OUTER_CUT OPERATIONS (TOOL T3)")
+                all_gcode_blocks.append("; ==============================================")
+                
+                for path in layer_outers_todo:
+                    px, py = zip(*path)
+                    ax.plot(px, py, "g--", alpha=0.8) # Vẽ nét đứt màu xanh lá biểu diễn Outer Cut
                     
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
                         path, "CNC_OUTER_CUT", sheet_thickness + thru_overlap, max_stepdown,
-                        t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
-                        enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default, cnc_dialect
+                        t3_feed, t3_plunge, safe_Z, enable_leadin, leadin_length,
+                        enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default
                     ))
 
-            # Đóng file kết thúc chương trình CNC tấm
-            all_gcode_blocks.extend(generate_program_footer(cnc_dialect))
+            # Kết thúc chương trình hoàn thiện tấm phôi
+            all_gcode_blocks.extend(generate_program_footer(cnc_dialect, safe_Z))
             ax.set_aspect('equal', adjustable='box')
             st.pyplot(fig)
             plt.close(fig)
@@ -615,6 +704,6 @@ if uploaded_files:
             st.download_button(
                 label=f"💾 Tải xuống G-Code Tấm #{sheet['sheet_id']}",
                 data=gcode_txt,
-                file_name=f"CAM_Engine_Layer_Optimized_Sheet_{sheet['sheet_id']}.nc",
+                file_name=f"CAM_Engine_MultiTool_Sheet_{sheet['sheet_id']}.nc",
                 mime="text/plain"
             )
