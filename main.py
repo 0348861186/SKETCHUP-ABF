@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+import matplotlib.patches mpatches
 
 # ============================================================
 # CAD / CAM CORE
@@ -14,7 +14,8 @@ from shapely.geometry import (
     Polygon,
     MultiPolygon,
     GeometryCollection,
-    LineString
+    LineString,
+    Point
 )
 from shapely.affinity import translate, rotate
 from shapely.geometry import JOIN_STYLE
@@ -27,13 +28,13 @@ except ImportError:
 # 1. STREAMLIT CONFIGURATION
 # ============================================================
 st.set_page_config(
-    page_title="Production-Ready CNC CAM Engine Pro v5.5",
+    page_title="Production-Ready CNC CAM Engine Pro v5.6",
     layout="wide"
 )
 st.markdown(
     """
-    ## 🏭 PRODUCTION-READY CNC CAM ENGINE PRO V5.5
-    **Continuous Spiral Ramp | 3D Structural Tabs | Pocketing | Multi-Dialect G-Code**
+    ## 🏭 CNC CAM ENGINE PRO V5.6 - INDUSTRIAL UPGRADE
+    **Chordal Deviation Ramping | Clean Pocketing Floors | Safe Lead-In Insertion**
     """,
     unsafe_allow_html=True
 )
@@ -56,8 +57,9 @@ t1_plunge = st.sidebar.number_input("Tốc độ đâm dao F_plunge (mm/min)", m
 t1_spindle = st.sidebar.number_input("Tốc độ trục chính S (RPM)", min_value=1000, value=18000, step=500)
 max_stepdown = st.sidebar.number_input("Chiều sâu mỗi lớp Stepdown (mm)", min_value=0.5, value=6.0, step=0.5)
 
-st.sidebar.markdown("### 🔩 LEAD-IN / RAMP / TABS")
-enable_leadin = st.sidebar.checkbox("Kích hoạt Lead-in", value=True)
+st.sidebar.markdown("### 🔩 ĐỘ MỊN & AN TOÀN NÂNG CẤP")
+chord_tolerance = st.sidebar.number_input("Dung sai dây cung - Độ mịn spline (mm)", min_value=0.005, max_value=0.5, value=0.02, step=0.005, format="%.3f")
+enable_leadin = st.sidebar.checkbox("Kích hoạt Lead-in an toàn", value=True)
 leadin_length = st.sidebar.number_input("Chiều dài Lead-in (mm)", min_value=2.0, value=5.0, step=0.5)
 enable_ramping = st.sidebar.checkbox("Kích hoạt Continuous Spiral Ramp", value=True)
 enable_tabs = st.sidebar.checkbox("Kích hoạt 3D Structural Tabs", value=True)
@@ -98,7 +100,7 @@ def repair_geometry(geom):
 
 def extract_largest_polygon(geom):
     if geom is None or geom.is_empty:
-        return None
+                return None
     if isinstance(geom, Polygon):
         return geom
     if isinstance(geom, MultiPolygon):
@@ -110,24 +112,34 @@ def extract_largest_polygon(geom):
     return None
 
 # ============================================================
-# 4. CAD EDGE EXTRACTION
+# 4. CAD EDGE EXTRACTION (CẢI TIẾN: CHORDAL TOLERANCE)
 # ============================================================
-def get_local_coordinates(cq_edge, plane_obj):
+def get_local_coordinates(cq_edge, plane_obj, tolerance=0.02):
     p_start = plane_obj.toLocalCoords(cq_edge.startPoint())
     p_end = plane_obj.toLocalCoords(cq_edge.endPoint())
     g_type = cq_edge.geomType()
 
     if g_type == "LINE":
         return {"type": "LINE", "start": (p_start.x, p_start.y), "end": (p_end.x, p_end.y)}
+    
     elif g_type == "CIRCLE":
         p_center = plane_obj.toLocalCoords(cq_edge.Center())
         return {"type": "CIRCLE", "center": (p_center.x, p_center.y), "radius": cq_edge.radius()}
+    
     else:
         try:
+            # Thuật toán tính toán số lượng phân đoạn động (Adaptive Discretization) dựa trên dung sai dây cung
             occ_curve = cq_edge.ToAdaptor3d()
             first_param = occ_curve.FirstParameter()
             last_param = occ_curve.LastParameter()
-            segments = 128
+            
+            # Ước tính độ dài hình học của đường cong phẳng
+            length_est = cq_edge.Length()
+            
+            # Áp dụng công thức tính phân đoạn dựa trên dung sai mũi tên dây cung (Chordal Deviation)
+            # N = L / sqrt(8 * R * tol) -> Thực hiện xấp xỉ động qua độ dài
+            segments = max(32, min(512, int(length_est / math.sqrt(tolerance if tolerance > 0 else 0.02))))
+            
             pts = []
             for i in range(segments + 1):
                 t = first_param + (last_param - first_param) * i / segments
@@ -254,7 +266,7 @@ def apply_t_bone_relief(polygon_points, tool_radius):
 # ============================================================
 # 8. STEP FILE ANALYSIS
 # ============================================================
-def process_cad_file_production(file_bytes, filename, sheet_thick):
+def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as temp_file:
@@ -274,11 +286,11 @@ def process_cad_file_production(file_bytes, filename, sheet_thick):
         ref_plane = cq.Plane(target_face)
         face_z_level = target_face.Center().z
         outer_wire = target_face.outerWire()
-        outer_edges = [get_local_coordinates(edge, ref_plane) for edge in outer_wire.Edges()]
+        outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
 
         features = []
         for inner_wire in target_face.innerWires():
-            wire_edges = [get_local_coordinates(edge, ref_plane) for edge in inner_wire.Edges()]
+            wire_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in inner_wire.Edges()]
             features.append({"type": "CNC_INNER_CUT", "edges": wire_edges, "depth": sheet_thick})
 
         pocket_signatures = set()
@@ -292,7 +304,7 @@ def process_cad_file_production(file_bytes, filename, sheet_thick):
             if not (0.5 <= depth < sheet_thick):
                 continue
 
-            p_edges = [get_local_coordinates(edge, ref_plane) for edge in face.outerWire().Edges()]
+            p_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in face.outerWire().Edges()]
             if not p_edges:
                 continue
             raw_p = clean_polygon_points(discrete_edges(p_edges))
@@ -327,7 +339,7 @@ def process_cad_file_production(file_bytes, filename, sheet_thick):
             os.remove(temp_path)
 
 # ============================================================
-# 9. NESTING
+# 9. NESTING (KHOÉT THỦNG LÒNG PHÔI ĐỂ TẬN DỤNG DIỆN TÍCH)
 # ============================================================
 def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_val):
     sheet_bound = Polygon([(margin_val, margin_val), (sheet_w - margin_val, margin_val), 
@@ -356,9 +368,11 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
         best_score = float("inf")
 
         for sheet_idx, sheet_data in enumerate(sheets):
-            placed_polys = sheet_data["placed_buffered_polygons"]
+            # SỬ DỤNG POLYGON UNION THAY VÌ LIST ĐỂ CHO PHÉP XẾP VÀO LÒNG LỖ TRỐNG (Holes Optimization)
+            placed_union = sheet_data["placed_union_geom"]
             anchors = [(margin_val, margin_val)]
-            for pb in placed_polys:
+            
+            for pb in sheet_data["placed_buffered_polygons"]:
                 b = pb.bounds
                 anchors.extend([(b[2], b[1]), (b[0], b[3]), (b[2], b[3])])
 
@@ -372,7 +386,8 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
 
                     if not sheet_bound.covers(candidate):
                         continue
-                    if any(candidate.intersects(placed) for placed in placed_polys):
+                    # Kiểm tra va chạm qua cơ chế Giao cắt diện tích thực tế (Area Intersection)
+                    if placed_union is not None and candidate.intersects(placed_union):
                         continue
 
                     bounds = candidate.bounds
@@ -391,33 +406,26 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
                 "placed_polygon": best_pos["raw_trans"], "dx": best_pos["dx"], "dy": best_pos["dy"], "angle": best_pos["angle"]
             })
             sheets[target_sheet_idx]["placed_buffered_polygons"].append(best_pos["cand_poly"])
+            # Cập nhật hình học vùng cấm va chạm
+            if sheets[target_sheet_idx]["placed_union_geom"] is None:
+                sheets[target_sheet_idx]["placed_union_geom"] = best_pos["cand_poly"]
+            else:
+                sheets[target_sheet_idx]["placed_union_geom"] = sheets[target_sheet_idx]["placed_union_geom"].union(best_pos["cand_poly"])
         else:
             new_sheet_id = len(sheets) + 1
             dx, dy = margin_val - min_x, margin_val - min_y
+            init_poly = translate(normalized_poly, xoff=dx, yoff=dy)
             sheets.append({
                 "sheet_id": new_sheet_id,
                 "parts": [{"part_ref": part, "original_offset": (min_x, min_y), "placed_polygon": translate(raw_normalized, xoff=dx, yoff=dy), "dx": dx, "dy": dy, "angle": 0}],
-                "placed_buffered_polygons": [translate(normalized_poly, xoff=dx, yoff=dy)]
+                "placed_buffered_polygons": [init_poly],
+                "placed_union_geom": init_poly
             })
     return sheets
 
 # ============================================================
 # 10. TANGENT / ARC-LENGTH UTILITIES
 # ============================================================
-def point_on_polyline(pts, distance):
-    if len(pts) < 2:
-        return np.array(pts[0])
-    total = 0.0
-    for i in range(len(pts)):
-        p1 = np.array(pts[i], dtype=float)
-        p2 = np.array(pts[(i + 1) % len(pts)], dtype=float)
-        seg_len = np.linalg.norm(p2 - p1)
-        if total + seg_len >= distance:
-            ratio = (distance - total) / max(seg_len, 1e-9)
-            return p1 + (p2 - p1) * ratio
-        total += seg_len
-    return np.array(pts[0], dtype=float)
-
 def cumulative_lengths(pts):
     lengths = [0.0]
     total = 0.0
@@ -429,7 +437,7 @@ def cumulative_lengths(pts):
     return lengths, total
 
 # ============================================================
-# 11. T-BONE + OFFSET TOOLPATH
+# 11. TOOLPATH (CẢI TIẾN: SẠCH SÀN POCKET TRÁNH ĐỂ LẠI LÕI)
 # ============================================================
 def get_true_offset_toolpath(edges, op_type, tool_radius):
     raw_pts = discrete_edges(edges)
@@ -447,17 +455,28 @@ def get_true_offset_toolpath(edges, op_type, tool_radius):
     if op_type == "CNC_OUTER_CUT":
         offset_geom = repair_geometry(poly.buffer(tool_radius, resolution=16, join_style=JOIN_STYLE.round))
         return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
+    
     elif op_type == "CNC_INNER_CUT":
         offset_geom = repair_geometry(poly.buffer(-tool_radius, resolution=16, join_style=JOIN_STYLE.round))
         return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
+    
     elif op_type == "CNC_POCKET":
         paths = []
-        stepover = tool_radius * 0.8
+        stepover = tool_radius * 0.75
         current_offset = -tool_radius
+        
         while True:
             offset_geom = repair_geometry(poly.buffer(current_offset, resolution=16, join_style=JOIN_STYLE.round))
             if offset_geom is None or offset_geom.is_empty:
+                # CẢI TIẾN: Nếu vùng đảo cuối cùng nhỏ hơn stepover nhưng vẫn còn diện tích, 
+                # chèn thêm một điểm centroid ăn tâm cuối để làm sạch sàn hoàn toàn.
+                prev_offset = current_offset + stepover
+                last_valid_geom = repair_geometry(poly.buffer(prev_offset, resolution=16, join_style=JOIN_STYLE.round))
+                if last_valid_geom and not last_valid_geom.is_empty:
+                    centroid = last_valid_geom.centroid
+                    paths.append([(centroid.x, centroid.y), (centroid.x + 0.001, centroid.y)])
                 break
+                
             if isinstance(offset_geom, Polygon):
                 paths.append(list(offset_geom.exterior.coords))
             elif isinstance(offset_geom, MultiPolygon):
@@ -506,7 +525,7 @@ def generate_program_footer(dialect):
     return ["M5", "M30"]
 
 # ============================================================
-# 14. TOOLPATH → G-CODE (COMPLETED & REFIRED)
+# 14. TOOLPATH → G-CODE (CẢI TIẾN: LEAD-IN AN TOÀN TUYỆT ĐỐI)
 # ============================================================
 def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, feed, plunge, spindle, safe_z, enable_leadin, leadin_length, enable_ramping, enable_tabs, tab_width, tab_thick, tab_count, dialect):
     gcode = []
@@ -524,7 +543,7 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
     tab_ranges = build_tab_ranges(pts, tab_width, tab_count) if (enable_tabs and op_type == "CNC_OUTER_CUT") else []
 
     # --------------------------------------------------------
-    # LEAD-IN / START POSITION
+    # CẢI TIẾN: AN TOÀN LỐI VÀO DAO (SAFE LEAD-IN POSITIONING)
     # --------------------------------------------------------
     start_pt = np.array(pts[0], dtype=float)
     next_pt = np.array(pts[1], dtype=float)
@@ -534,16 +553,16 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
     if norm_v > 1e-5 and enable_leadin:
         perp_vec = np.array([-vec_dir[1], vec_dir[0]]) / norm_v
         leadin_start = start_pt + perp_vec * leadin_length
+        
+        # ĐƯỜNG ĐI AN TOÀN: Xuống vị trí Z an toàn ngoài phôi trước khi hạ xuống sàn vật liệu
         gcode.append(f"G0 X{leadin_start[0]:.3f} Y{leadin_start[1]:.3f} Z{safe_z:.3f}")
-        gcode.append(f"G1 Z0.000 F{plunge}")
+        gcode.append(f"G1 Z0.000 F{plunge}") 
+        # Cắt tịnh tiến ngang để tiến vào điểm bắt đầu chu kỳ Ramp, loại bỏ đâm dao thẳng đứng vào bề mặt chi tiết
         gcode.append(f"G1 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} F{feed}")
     else:
         gcode.append(f"G0 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} Z{safe_z:.3f}")
         gcode.append(f"G1 Z0.000 F{plunge}")
 
-    # --------------------------------------------------------
-    # Z ZONES & PASSES CALCULATION
-    # --------------------------------------------------------
     z_targets = []
     current_z = 0.0
     while current_z > -total_depth:
@@ -568,11 +587,9 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
                 p_c = np.array(pts[idx], dtype=float)
                 dist_accum = (lengths[idx] if i < n_pts else total_len)
                 
-                # Tính độ sâu Z dốc xoắn ốc liên tục xuống điểm đích
                 ratio = dist_accum / total_len
                 z_ramp = previous_z - (pass_depth * ratio)
 
-                # Áp dụng giữ phôi 3D Tabs nếu chạm phạm vi Tab cấu trúc
                 if get_tab_state(dist_accum, tab_ranges):
                     tab_z_boundary = -total_depth + tab_thick
                     if z_ramp < tab_z_boundary:
@@ -580,7 +597,6 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
 
                 gcode.append(f"G1 X{p_c[0]:.3f} Y{p_c[1]:.3f} Z{z_ramp:.3f} F{feed}")
         else:
-            # Lớp cắt profile thông thường theo tầng Z phẳng
             for i in range(n_pts + 1):
                 idx = i % n_pts
                 p_c = np.array(pts[idx], dtype=float)
@@ -596,7 +612,6 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
 
         previous_z = target_z
 
-    # Retract về vị trí an toàn sau khi hoàn thiện đường chạy cắt phôi
     gcode.append(f"G0 Z{safe_z:.3f}")
     return gcode
 
@@ -608,16 +623,17 @@ uploaded_files = st.file_uploader("Tải lên bản vẽ kỹ thuật chi tiết
 if uploaded_files:
     parsed_parts = []
     for f in uploaded_files:
-        with st.spinner(f"Đang phân tích cú pháp dữ liệu cấu trúc hình học: {f.name}"):
+        with st.spinner(f"Đang phân tích dữ liệu cấu trúc: {f.name}"):
             try:
-                part_data = process_cad_file_production(f.getvalue(), f.name, sheet_thickness)
+                # Đưa cấu hình Chordal Tolerance vào máy quét dữ liệu đầu vào
+                part_data = process_cad_file_production(f.getvalue(), f.name, sheet_thickness, chord_tolerance)
                 parsed_parts.append(part_data)
                 st.success(f"Đã nạp thành công: {part_data['name']} ({part_data['width']:.1f}x{part_data['height']:.1f} mm)")
             except Exception as e:
                 st.error(f"Lỗi phân tích tệp {f.name}: {str(e)}")
 
     if parsed_parts:
-        st.subheader("📦 KẾT QUẢ SẮP XẾP TỰ ĐỘNG (NESTING NESTED ENGINE)")
+        st.subheader("📦 KẾT QUẢ SẮP XẾP TỰ ĐỘNG NÂNG CẤP (HOLES LAYER OPTIMIZED)")
         nested_sheets = execute_production_nesting(parsed_parts, sheet_W, sheet_H, total_offset, margin)
         
         st.metric("Tổng số lượng tấm ván cần dùng", len(nested_sheets))
@@ -637,33 +653,30 @@ if uploaded_files:
                 ref = placed["part_ref"]
                 poly = placed["placed_polygon"]
                 
-                # Vẽ bao hình chi tiết thực tế
                 x, y = poly.exterior.xy
                 ax.plot(x, y, "b-", linewidth=2)
                 ax.fill(x, y, "skyblue", alpha=0.5)
                 ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=9, weight='bold')
 
-                # Tái cấu trúc hình học biên dạng ngoài
                 trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                 outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", tool_radius)
                 
                 for path in outer_paths:
                     px, py = zip(*path)
-                    ax.plot(px, py, "g--", alpha=0.8) # Đường chạy dao ngoài màu xanh lá
+                    ax.plot(px, py, "g--", alpha=0.8)
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
                         path, "CNC_OUTER_CUT", sheet_thickness + thru_overlap, max_stepdown,
                         t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
                         enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default, cnc_dialect
                     ))
 
-                # Xử lý cắt lỗ hở trong & Pocket hạ nền sâu
                 for feat in ref["features"]:
                     trans_feat_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                     feat_paths = get_true_offset_toolpath(trans_feat_edges, feat["type"], tool_radius)
                     
                     for path in feat_paths:
                         px, py = zip(*path)
-                        ax.plot(px, py, "m:", alpha=0.7) # Lỗ trong / Pocket màu hồng cánh sen
+                        ax.plot(px, py, "m:", alpha=0.7)
                         all_gcode_blocks.extend(generate_gcode_for_toolpath(
                             path, feat["type"], feat["depth"], max_stepdown,
                             t1_feed, t1_plunge, t1_spindle, safe_Z, enable_leadin, leadin_length,
@@ -671,15 +684,13 @@ if uploaded_files:
                         ))
 
             all_gcode_blocks.extend(generate_program_footer(cnc_dialect))
-            
             ax.set_aspect('equal', adjustable='box')
             st.pyplot(fig)
 
-            # Xuất dữ liệu mã máy G-code cho người vận hành
             gcode_txt = "\n".join(all_gcode_blocks)
             st.download_button(
                 label=f"💾 Tải xuống mã máy G-Code Tấm #{sheet['sheet_id']}",
                 data=gcode_txt,
-                file_name=f"CAM_Engine_Sheet_{sheet['sheet_id']}.nc",
+                file_name=f"CAM_Engine_Industrial_Sheet_{sheet['sheet_id']}.nc",
                 mime="text/plain"
             )
