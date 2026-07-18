@@ -189,18 +189,8 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_file.write(file_bytes)
             temp_path = temp_file.name
 
-       imported_shape = cq.importers.importStep(temp_path)
-        
-        solids = []
-        for obj in imported_shape.objects:
-            if hasattr(obj, "ShapeType"):
-                if obj.ShapeType() == "Solid":
-                    solids.append(obj)
-                elif obj.ShapeType() == "Compound":
-                    solids.extend([s for s in obj.Solids()])
-            elif hasattr(obj, "Solids"):
-                solids.extend([s for s in obj.Solids()])
-                
+        imported_shape = cq.importers.importStep(temp_path)
+        solids = imported_shape.solids().vals()
         if not solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
         
