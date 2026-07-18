@@ -283,8 +283,30 @@ def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
             top_faces = all_faces
 
         target_face = max(top_faces, key=lambda f: f.Area())
-        ref_plane = cq.Plane(target_face)
-        face_z_level = target_face.Center().z
+
+face_center = target_face.Center()
+face_normal = target_face.normalAt()
+
+normal = cq.Vector(
+    face_normal.x,
+    face_normal.y,
+    face_normal.z
+)
+
+if abs(normal.z) < 0.9:
+    ref_vector = cq.Vector(0, 0, 1)
+else:
+    ref_vector = cq.Vector(1, 0, 0)
+
+x_dir = ref_vector.cross(normal).normalized()
+
+ref_plane = cq.Plane(
+    origin=face_center,
+    xDir=x_dir,
+    normal=normal
+)
+
+face_z_level = face_center.z
         outer_wire = target_face.outerWire()
         outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
 
