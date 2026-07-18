@@ -74,7 +74,7 @@ t3_plunge = st.sidebar.number_input("Tốc độ đâm F_plunge - T3 (mm/min)", 
 t3_spindle = st.sidebar.number_input("Tốc độ trục S - T3 (RPM)", min_value=1000, value=18000, step=500, key="t3_s")
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ THÔNG SỐ VẬN HÀNH CHUNG")
+st.sidebar.header("⚙️ THÔNG SỐ VẬT LIỆU VẬN HÀNH CHUNG")
 max_stepdown = st.sidebar.number_input("Chiều sâu mỗi lớp Stepdown (mm)", min_value=0.5, value=6.0, step=0.5)
 chord_tolerance = st.sidebar.number_input("Dung sai dây cung (mm)", min_value=0.005, max_value=0.5, value=0.02, step=0.005, format="%.3f")
 enable_leadin = st.sidebar.checkbox("Kích hoạt Lead-in an toàn", value=True)
@@ -178,7 +178,7 @@ def clean_polygon_points(points, tolerance=0.01):
     return cleaned
 
 # ============================================================
-# 5. ASSEMBLY EXPLODER
+# 5. ASSEMBLY EXPLODER (FIXED FOR COMPOUND OBJECTS)
 # ============================================================
 def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
     temp_path = None
@@ -190,7 +190,16 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_path = temp_file.name
 
         imported_shape = cq.importers.importStep(temp_path)
-        solids = imported_shape.solids().vals()
+        
+        # SỬA LỖI Ở ĐÂY: Kiểm tra kiểu dữ liệu trả về của imported_shape để lấy danh sách các Solids hợp lệ
+        if hasattr(imported_shape, "solids"):
+            solids = imported_shape.solids().vals()
+        elif hasattr(imported_shape, "Solids"):
+            solids = imported_shape.Solids()
+        else:
+            # Trường hợp là iterable trực tiếp
+            solids = list(imported_shape)
+            
         if not solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
         
@@ -198,9 +207,14 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
 
         for idx, solid in enumerate(solids):
             if solid.Area() < 500: 
-                return parsed_parts
+                continue
 
-            faces = solid.faces().vals()
+            # Xử lý lấy danh sách mặt (Faces) tương thích với cả CQ Solid lẫn TopoDS_Solid
+            if hasattr(solid, "faces"):
+                faces = solid.faces().vals()
+            else:
+                faces = solid.Faces()
+                
             plane_faces = [f for f in faces if f.geomType() == "PLANE"]
             if not plane_faces:
                 continue
@@ -528,9 +542,6 @@ def generate_program_header(dialect):
     return ["G90", "G21", "G17"]
 
 def generate_tool_change_block(dialect, tool_number, spindle_speed, safe_z):
-    """
-    Tạo cấu trúc dừng trục chính, nhấc dao an toàn, thay dao cơ học M6 và tạm dừng máy M0 cho từng Layer
-    """
     block = [
         "",
         "; ----------------------------------------------",
@@ -544,7 +555,7 @@ def generate_tool_change_block(dialect, tool_number, spindle_speed, safe_z):
             f"T{tool_number} M6",           # Gọi đài dao / Dừng thay dao cơ học
             f"G43 H{tool_number} Z{safe_z:.3f}", # Bù trừ chiều dài hình học dao tương ứng
             f"S{int(spindle_speed)} M3",     # Quay lại trục chính với tốc độ cấu hình mới
-            "M0"                             # Lệnh dừng chương trình tạm thời (Chờ người vận hành xác nhận)
+            "M0"                             # Lệnh dừng chương trình tạm thời
         ])
     else:
         block.extend([
@@ -588,122 +599,89 @@ if uploaded_files:
             ax.add_patch(mpatches.Rectangle((0, 0), sheet_W, sheet_H, color="darkgrey", alpha=0.3, label="Khổ ván gốc"))
             ax.add_patch(mpatches.Rectangle((margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, fill=False, linestyle="--", color="red"))
             
-            # Khởi tạo Header chương trình chung
             all_gcode_blocks = generate_program_header(cnc_dialect)
 
-            # Tách biệt hoàn toàn 3 mảng tác vụ độc lập tương ứng với 3 Layer hình học
             layer_pockets_todo = []
             layer_inners_todo = []
             layer_outers_todo = []
 
-            # Bước 1: Quét hệ tọa độ phẳng xếp tấm, bóc tách và phân phối chính xác vào từng Layer
             for p_idx, placed in enumerate(sheet["parts"]):
                 ref = placed["part_ref"]
                 poly = placed["placed_polygon"]
                 
-                # Vẽ render mô phỏng chi tiết
                 x, y = poly.exterior.xy
                 ax.plot(x, y, "b-", linewidth=2)
                 ax.fill(x, y, "skyblue", alpha=0.5)
                 ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=8, weight='bold')
 
-                # LAYER 3 - OUTER CUT (Đường Contour ngoài)
                 trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                 outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", t3_dia / 2.0)
                 for path in outer_paths:
                     if len(path) >= 2:
                         layer_outers_todo.append(path)
 
-                # PHÂN TÁCH TRIỆT ĐỂ: Duyệt qua các feature trong lòng để chia đúng vào Pocket hoặc Inner Cut
                 for feat in ref["features"]:
                     trans_feat_edges = transform_edges_production(feat["edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                     
                     if feat["type"] == "CNC_POCKET":
-                        # Cắt hèm/túi dùng đường kính dao T1
                         pocket_paths = get_true_offset_toolpath(trans_feat_edges, "CNC_POCKET", t1_dia / 2.0)
                         for path in pocket_paths:
                             if len(path) >= 2:
                                 layer_pockets_todo.append({"path": path, "depth": feat["depth"]})
                                 
                     elif feat["type"] == "CNC_INNER_CUT":
-                        # Cắt lỗ khoét thủng dùng đường kính dao T2
                         inner_paths = get_true_offset_toolpath(trans_feat_edges, "CNC_INNER_CUT", t2_dia / 2.0)
                         for path in inner_paths:
                             if len(path) >= 2:
                                 layer_inners_todo.append({"path": path, "depth": feat["depth"]})
 
-            # =========================================================================
-            # XUẤT LAYER 1: CNC_POCKET (Sử dụng Dao T1)
-            # =========================================================================
+            # LAYER 1: POCKETS
             if layer_pockets_todo:
-                # Chèn khối mã lệnh thay dao T1 tự động + Dừng chương trình
                 all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=1, spindle_speed=t1_spindle, safe_z=safe_Z))
-                all_gcode_blocks.append("; ==============================================")
-                all_gcode_blocks.append("; LAYER 1: CNC_POCKET OPERATIONS (TOOL T1)")
-                all_gcode_blocks.append("; ==============================================")
-                
                 for item in layer_pockets_todo:
                     path = item["path"]
                     px, py = zip(*path)
-                    ax.plot(px, py, "m:", alpha=0.7) # Vẽ nét đứt màu hồng trên đồ thị biểu diễn Pocket
-                    
+                    ax.plot(px, py, "m:", alpha=0.7)
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
-                        path, "CNC_POCKET", item["depth"], max_stepdown,
-                        t1_feed, t1_plunge, safe_Z, enable_leadin, leadin_length,
-                        enable_ramping, False, tab_width, tab_thickness, tab_count_default
+                        path, "CNC_POCKET", item["depth"], max_stepdown, t1_feed, t1_plunge, safe_Z, 
+                        enable_leadin, leadin_length, enable_ramping, False, tab_width, tab_thickness, tab_count_default
                     ))
 
-            # =========================================================================
-            # XUẤT LAYER 2: CNC_INNER_CUT (Sử dụng Dao T2)
-            # =========================================================================
+            # LAYER 2: INNERS
             if layer_inners_todo:
-                # Chèn khối mã lệnh thay dao T2 tự động + Dừng chương trình
                 all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=2, spindle_speed=t2_spindle, safe_z=safe_Z))
-                all_gcode_blocks.append("; ==============================================")
-                all_gcode_blocks.append("; LAYER 2: CNC_INNER_CUT OPERATIONS (TOOL T2)")
-                all_gcode_blocks.append("; ==============================================")
-                
                 for item in layer_inners_todo:
                     path = item["path"]
                     px, py = zip(*path)
-                    ax.plot(px, py, "c-.", alpha=0.8) # Vẽ nét gạch chấm xanh cyan biểu diễn Inner Cut
-                    
+                    ax.plot(px, py, "g--", alpha=0.7)
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
-                        path, "CNC_INNER_CUT", item["depth"], max_stepdown,
-                        t2_feed, t2_plunge, safe_Z, enable_leadin, leadin_length,
-                        enable_ramping, False, tab_width, tab_thickness, tab_count_default
+                        path, "CNC_INNER_CUT", item["depth"], max_stepdown, t2_feed, t2_plunge, safe_Z, 
+                        enable_leadin, leadin_length, enable_ramping, False, tab_width, tab_thickness, tab_count_default
                     ))
 
-            # =========================================================================
-            # XUẤT LAYER 3: CNC_OUTER_CUT (Sử dụng Dao T3)
-            # =========================================================================
+            # LAYER 3: OUTERS
             if layer_outers_todo:
-                # Chèn khối mã lệnh thay dao T3 tự động + Dừng chương trình
                 all_gcode_blocks.extend(generate_tool_change_block(cnc_dialect, tool_number=3, spindle_speed=t3_spindle, safe_z=safe_Z))
-                all_gcode_blocks.append("; ==============================================")
-                all_gcode_blocks.append("; LAYER 3: CNC_OUTER_CUT OPERATIONS (TOOL T3)")
-                all_gcode_blocks.append("; ==============================================")
-                
                 for path in layer_outers_todo:
                     px, py = zip(*path)
-                    ax.plot(px, py, "g--", alpha=0.8) # Vẽ nét đứt màu xanh lá biểu diễn Outer Cut
-                    
+                    ax.plot(px, py, "r-", alpha=0.6, linewidth=1.5)
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
-                        path, "CNC_OUTER_CUT", sheet_thickness + thru_overlap, max_stepdown,
-                        t3_feed, t3_plunge, safe_Z, enable_leadin, leadin_length,
-                        enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default
+                        path, "CNC_OUTER_CUT", sheet_thickness + thru_overlap, max_stepdown, t3_feed, t3_plunge, safe_Z, 
+                        enable_leadin, leadin_length, enable_ramping, enable_tabs, tab_width, tab_thickness, tab_count_default
                     ))
 
-            # Kết thúc chương trình hoàn thiện tấm phôi
             all_gcode_blocks.extend(generate_program_footer(cnc_dialect, safe_Z))
-            ax.set_aspect('equal', adjustable='box')
+            
             st.pyplot(fig)
             plt.close(fig)
 
-            gcode_txt = "\n".join(all_gcode_blocks)
+            # Khu vực hiển thị kết quả G-Code
+            gcode_text = "\n".join(all_gcode_blocks)
             st.download_button(
-                label=f"💾 Tải xuống G-Code Tấm #{sheet['sheet_id']}",
-                data=gcode_txt,
-                file_name=f"CAM_Engine_MultiTool_Sheet_{sheet['sheet_id']}.nc",
+                label=f"💾 Tải xuống G-Code Tấm phôi #{sheet['sheet_id']}",
+                data=gcode_text,
+                file_name=f"Sheet_{sheet['sheet_id']}_CNC_Output.nc",
                 mime="text/plain"
             )
+            with st.expander(f"👀 Xem trước mã G-Code Tấm #{sheet['sheet_id']}"):
+                st.code(gcode_text, language="gcode")
