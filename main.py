@@ -7,20 +7,16 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 # ============================================================
-# CAD / CAM CORE
+# CAD / CAM CORE (UPGRADED FOR MULTI-BODY ASSEMBLY)
 # ============================================================
 import cadquery as cq
 from shapely.geometry import (
-    Polygon,
-    MultiPolygon,
-    GeometryCollection,
-    LineString,
-    Point
+    Polygon, MultiPolygon, GeometryCollection, LineString, Point
 )
 from shapely.affinity import translate, rotate
 from shapely.geometry import JOIN_STYLE
+
 try:
-    # Hỗ trợ Shapely 2.0+ trực tiếp
     from shapely import make_valid
 except ImportError:
     try:
@@ -32,13 +28,13 @@ except ImportError:
 # 1. STREAMLIT CONFIGURATION
 # ============================================================
 st.set_page_config(
-    page_title="Production-Ready CNC CAM Engine Pro v5.6",
+    page_title="Production-Ready CNC CAM Engine Pro v6.0",
     layout="wide"
 )
 st.markdown(
     """
-    ## 🏭 CNC CAM ENGINE PRO V5.6 - INDUSTRIAL UPGRADE
-    **Chordal Deviation Ramping | Clean Pocketing Floors | Safe Lead-In Insertion**
+    ## 🏭 CNC CAM ENGINE PRO V6.0 - AUTOMATIC ASSEMBLY EXPLODER
+    **Hệ thống tự động bóc tách cụm tủ 3D | Hạ phẳng chi tiết | Nesting tối ưu | Xuất G-Code hàng loạt**
     """,
     unsafe_allow_html=True
 )
@@ -49,7 +45,7 @@ st.markdown(
 st.sidebar.header("📐 THÔNG SỐ VẬT LIỆU PHÔI")
 sheet_W = st.sidebar.number_input("Chiều rộng khổ ván X (mm)", min_value=100.0, value=2440.0, step=10.0)
 sheet_H = st.sidebar.number_input("Chiều cao khổ ván Y (mm)", min_value=100.0, value=1220.0, step=10.0)
-sheet_thickness = st.sidebar.number_input("Độ dày ván thực tế Z (mm)", min_value=0.1, value=17.0, step=0.1)
+sheet_thickness = st.sidebar.number_input("Độ dày ván tiêu chuẩn Z (mm)", min_value=0.1, value=17.0, step=0.1)
 margin = st.sidebar.number_input("Khoảng cách biên tấm ván (mm)", min_value=0.0, value=15.0, step=1.0)
 safety_spacing = st.sidebar.number_input("Khoảng cách giữa các chi tiết (mm)", min_value=0.0, value=6.0, step=0.5)
 
@@ -72,7 +68,7 @@ tab_thickness = st.sidebar.number_input("Độ dày vật liệu còn lại tạ
 tab_count_default = st.sidebar.slider("Số lượng Tab / chi tiết", min_value=2, max_value=8, value=4)
 
 st.sidebar.markdown("### ⚙ POST-PROCESSOR")
-cnc_dialect = st.sidebar.selectbox("Hệ điều hành / Phần mềm máy CNC", ["Fanuc / Syntec", "Mach3 / Grbl", "UGS (Universal Gcode Sender)", "Weihong"])
+cnc_dialect = st.sidebar.selectbox("Hệ điều hành / Phần mềm máy CNC", ["Fanuc / Syntec", "Mach3 / Grbl", "UGS", "Weihong"])
 safe_Z = st.sidebar.number_input("Safe Z (mm)", min_value=1.0, value=25.0, step=1.0)
 thru_overlap = st.sidebar.number_input("Độ sâu cắt xuyên thêm (mm)", min_value=0.0, value=0.5, step=0.1)
 
@@ -83,40 +79,30 @@ total_offset = tool_radius + safety_spacing
 # 3. GEOMETRY REPAIR
 # ============================================================
 def repair_geometry(geom):
-    if geom is None or geom.is_empty:
-        return geom
-    if geom.is_valid:
-        return geom
+    if geom is None or geom.is_empty: return geom
+    if geom.is_valid: return geom
     if make_valid is not None:
         try:
             fixed = make_valid(geom)
-            if not fixed.is_empty:
-                return fixed
-        except Exception:
-            pass
+            if not fixed.is_empty: return fixed
+        except: pass
     try:
         fixed = geom.buffer(0)
-        if not fixed.is_empty:
-            return fixed
-    except Exception:
-        pass
+        if not fixed.is_empty: return fixed
+    except: pass
     return geom
 
 def extract_largest_polygon(geom):
-    if geom is None or geom.is_empty:
-        return None
-    if isinstance(geom, Polygon):
-        return geom
-    if isinstance(geom, MultiPolygon):
-        return max(geom.geoms, key=lambda p: p.area)
+    if geom is None or geom.is_empty: return None
+    if isinstance(geom, Polygon): return geom
+    if isinstance(geom, MultiPolygon): return max(geom.geoms, key=lambda p: p.area)
     if isinstance(geom, GeometryCollection):
         polygons = [g for g in geom.geoms if isinstance(g, Polygon)]
-        if polygons:
-            return max(polygons, key=lambda p: p.area)
+        if polygons: return max(polygons, key=lambda p: p.area)
     return None
 
 # ============================================================
-# 4. CAD EDGE EXTRACTION (CẢI TIẾN: CHORDAL TOLERANCE)
+# 4. CAD EDGE EXTRACTION WITH LOCAL PLANE
 # ============================================================
 def get_local_coordinates(cq_edge, plane_obj, tolerance=0.02):
     p_start = plane_obj.toLocalCoords(cq_edge.startPoint())
@@ -125,33 +111,25 @@ def get_local_coordinates(cq_edge, plane_obj, tolerance=0.02):
 
     if g_type == "LINE":
         return {"type": "LINE", "start": (p_start.x, p_start.y), "end": (p_end.x, p_end.y)}
-    
     elif g_type == "CIRCLE":
         p_center = plane_obj.toLocalCoords(cq_edge.Center())
         return {"type": "CIRCLE", "center": (p_center.x, p_center.y), "radius": cq_edge.radius()}
-    
     else:
         try:
             occ_curve = cq_edge.ToAdaptor3d()
             first_param = occ_curve.FirstParameter()
             last_param = occ_curve.LastParameter()
             length_est = cq_edge.Length()
-            
-            # Áp dụng công thức tính phân đoạn dựa trên dung sai mũi tên dây cung (Chordal Deviation)
             segments = max(32, min(512, int(length_est / math.sqrt(tolerance if tolerance > 0 else 0.02))))
-            
             pts = []
             for i in range(segments + 1):
                 t = first_param + (last_param - first_param) * i / segments
                 p_loc = plane_obj.toLocalCoords(cq_edge.valueAt(t))
                 pts.append((p_loc.x, p_loc.y))
             return {"type": "DISCRETE_CURVE", "points": pts}
-        except Exception:
+        except:
             return {"type": "LINE", "start": (p_start.x, p_start.y), "end": (p_end.x, p_end.y)}
 
-# ============================================================
-# 5. EDGE → CONTINUOUS POINTS
-# ============================================================
 def discrete_edges(edges):
     pts = []
     for edge in edges:
@@ -169,30 +147,133 @@ def discrete_edges(edges):
     return pts
 
 def clean_polygon_points(points, tolerance=0.01):
-    if not points:
-        return []
+    if not points: return []
     cleaned = []
     for p in points:
         p = (float(p[0]), float(p[1]))
-        if not cleaned:
-            cleaned.append(p)
+        if not cleaned: cleaned.append(p)
         else:
-            if not np.allclose(cleaned[-1], p, atol=tolerance):
-                cleaned.append(p)
+            if not np.allclose(cleaned[-1], p, atol=tolerance): cleaned.append(p)
     if len(cleaned) > 2:
-        if not np.allclose(cleaned[0], cleaned[-1], atol=tolerance):
-            cleaned.append(cleaned[0])
+        if not np.allclose(cleaned[0], cleaned[-1], atol=tolerance): cleaned.append(cleaned[0])
     return cleaned
 
 # ============================================================
-# 6. TRANSFORM CAD EDGE
+# 5. NEW DETAILED ADVANCED ASSEMBLY EXPLODER (TỰ PHÂN RÃ CỤM 3D)
+# ============================================================
+def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
+    """
+    Hàm phân rã cụm tủ: Tìm tất cả các khối độc lập, nhận diện hướng ván, 
+    xoay phẳng về mặt phẳng XY chuẩn để trích xuất biên dạng CAM.
+    """
+    temp_path = None
+    parsed_parts = []
+    
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as temp_file:
+            temp_file.write(file_bytes)
+            temp_path = temp_file.name
+
+        # Đọc toàn bộ tệp STEP (Hỗ trợ cả cụm lắp ráp)
+        imported_shape = cq.importers.importStep(temp_path)
+        
+        # Lấy danh sách các khối (Solids) riêng lẻ cấu thành nên cái tủ
+        solids = imported_shape.solids().vals()
+        if not solids:
+            raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
+        
+        st.info(f"🔎 Đã phát hiện tổng cộng **{len(solids)}** chi tiết trong mô hình lắp ráp.")
+
+        for idx, solid in enumerate(solids):
+            # Lọc bỏ các khối quá nhỏ không phải là tấm ván (ốc vít, bản lề, phụ kiện...)
+            if solid.Area() < 500: 
+                continue 
+
+            faces = solid.faces().vals()
+            # Tìm mặt phẳng có diện tích lớn nhất làm mặt tham chiếu định hình tấm ván
+            plane_faces = [f for f in faces if f.geomType() == "PLANE"]
+            if not plane_faces:
+                continue
+            
+            target_face = max(plane_faces, key=lambda f: f.Area())
+            face_center = target_face.Center()
+            face_normal = target_face.normalAt(face_center)
+
+            # Khởi tạo Hệ tọa độ phẳng (Plane) dựa trên bề mặt nghiêng/đứng của tấm ván trong không gian 3D
+            ref_plane = cq.Plane(origin=face_center, normal=face_normal)
+            
+            # Trích xuất đường biên bao ngoài (Outer Contour) của tấm ván
+            outer_wire = target_face.outerWire()
+            outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
+            
+            # Tạo các Feature gia công bên trong (Lỗ khoét, hèm...)
+            features = []
+            for inner_wire in target_face.innerWires():
+                wire_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in inner_wire.Edges()]
+                features.append({"type": "CNC_INNER_CUT", "edges": wire_edges, "depth": std_thickness})
+
+            # Tìm các túi hạ nền (Pockets) nông sâu trên tấm ván này
+            pocket_signatures = set()
+            face_z_level = face_center.z
+            
+            for face in faces:
+                if face is target_face or face.geomType() != "PLANE": 
+                    continue
+                # Chiếu tâm của mặt đang xét lên hệ tọa độ cục bộ của tấm ván để đo độ sâu Z
+                local_center = ref_plane.toLocalCoords(face.Center())
+                depth = abs(local_center.z)
+                
+                if 0.5 <= depth < (std_thickness + 2.0): # Ngưỡng nhận diện rãnh hèm hạ nền
+                    p_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in face.outerWire().Edges()]
+                    if not p_edges: continue
+                    raw_p = clean_polygon_points(discrete_edges(p_edges))
+                    if len(raw_p) < 4: continue
+                    
+                    try:
+                        poly = repair_geometry(Polygon(raw_p))
+                        if poly is None: continue
+                        centroid = poly.centroid
+                        signature = (round(centroid.x, 2), round(centroid.y, 2), round(depth, 1))
+                        if signature in pocket_signatures: continue
+                        pocket_signatures.add(signature)
+                        features.append({"type": "CNC_POCKET", "edges": p_edges, "depth": depth})
+                    except:
+                        continue
+
+            # Đo kích thước bao cục bộ để phục vụ thuật toán Nesting phẳng
+            raw_outer_pts = clean_polygon_points(discrete_edges(outer_edges))
+            if len(raw_outer_pts) < 4: continue
+            poly_outer = repair_geometry(Polygon(raw_outer_pts))
+            if poly_outer is None or poly_outer.is_empty: continue
+            
+            min_x, min_y, max_x, max_y = poly_outer.bounds
+            width_local = max_x - min_x
+            height_local = max_y - min_y
+
+            parsed_parts.append({
+                "name": f"Tam_Van_{idx+1}",
+                "width": width_local,
+                "height": height_local,
+                "outer_edges": outer_edges,
+                "features": features,
+                "origin_x": face_center.x,
+                "origin_y": face_center.y
+            })
+            
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+    return parsed_parts
+
+# ============================================================
+# 6. TRANSFORM CAD EDGE & RELIEF UTILITIES
 # ============================================================
 def transform_point_production(x, y, dx, dy, angle, ox, oy):
     x_local = x - ox
     y_local = y - oy
     rad = math.radians(angle)
-    cos_a = math.cos(rad)
-    sin_a = math.sin(rad)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
     return (x_local * cos_a - y_local * sin_a + dx, x_local * sin_a + y_local * cos_a + dy)
 
 def transform_edge_production(edge, dx, dy, angle, ox, oy):
@@ -211,21 +292,14 @@ def transform_edge_production(edge, dx, dy, angle, ox, oy):
 def transform_edges_production(edges, dx, dy, angle, ox, oy):
     return [transform_edge_production(edge, dx, dy, angle, ox, oy) for edge in edges]
 
-# ============================================================
-# 7. T-BONE RELIEF
-# ============================================================
 def apply_t_bone_relief(polygon_points, tool_radius):
-    if len(polygon_points) < 4:
-        return polygon_points
+    if len(polygon_points) < 4: return polygon_points
     pts = list(polygon_points)
-    if np.allclose(pts[0], pts[-1]):
-        pts.pop()
+    if np.allclose(pts[0], pts[-1]): pts.pop()
 
     poly = repair_geometry(Polygon(pts))
-    if not isinstance(poly, Polygon) or poly.is_empty:
-        return polygon_points
-    if not poly.exterior.is_ccw:
-        pts.reverse()
+    if not isinstance(poly, Polygon) or poly.is_empty: return polygon_points
+    if not poly.exterior.is_ccw: pts.reverse()
 
     result = []
     n = len(pts)
@@ -233,20 +307,15 @@ def apply_t_bone_relief(polygon_points, tool_radius):
         p_prev = np.array(pts[i - 1], dtype=float)
         p_curr = np.array(pts[i], dtype=float)
         p_next = np.array(pts[(i + 1) % n], dtype=float)
-
-        v1 = p_prev - p_curr
-        v2 = p_next - p_curr
+        v1, v2 = p_prev - p_curr, p_next - p_curr
         len_v1, len_v2 = np.linalg.norm(v1), np.linalg.norm(v2)
-
         if len_v1 < 1e-5 or len_v2 < 1e-5:
             result.append(tuple(p_curr))
             continue
-
         v1_u, v2_u = v1 / len_v1, v2 / len_v2
         dot = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
         angle = math.acos(dot)
         cross_z = v1_u[0] * v2_u[1] - v1_u[1] * v2_u[0]
-
         is_concave = (cross_z > 0.001)
         is_right_angle = (abs(angle - math.pi / 2) < math.radians(10))
 
@@ -259,92 +328,11 @@ def apply_t_bone_relief(polygon_points, tool_radius):
                 relief_point = p_curr + bisector_u * tool_radius
                 result.append(tuple(relief_point))
                 result.append(tuple(p_curr))
-
     result.append(result[0])
     return result
 
 # ============================================================
-# 8. STEP FILE ANALYSIS
-# ============================================================
-def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as temp_file:
-            temp_file.write(file_bytes)
-            temp_path = temp_file.name
-
-        part = cq.importers.importStep(temp_path)
-        all_faces = part.faces().vals()
-        if not all_faces:
-            raise ValueError("STEP không chứa mặt hình học hợp lệ.")
-
-        top_faces = [f for f in all_faces if f.geomType() == "PLANE" and f.normalAt().z > 0.8]
-        if not top_faces:
-            top_faces = all_faces
-
-        target_face = max(top_faces, key=lambda f: f.Area())
-        
-        # FIX LỖI OCC GP_ EXPECTED: Khởi tạo Plane thông qua cấu trúc Origin và Normal chuẩn hình học
-        face_center = target_face.Center()
-        face_normal = target_face.normalAt(face_center)
-        ref_plane = cq.Plane(origin=face_center, normal=face_normal)
-        
-        face_z_level = face_center.z
-        outer_wire = target_face.outerWire()
-        outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
-
-        features = []
-        for inner_wire in target_face.innerWires():
-            wire_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in inner_wire.Edges()]
-            features.append({"type": "CNC_INNER_CUT", "edges": wire_edges, "depth": sheet_thick})
-
-        pocket_signatures = set()
-        for face in all_faces:
-            if face is target_face or face.geomType() != "PLANE":
-                continue
-            f_z = face.Center().z
-            if not (f_z < face_z_level and f_z >= (face_z_level - sheet_thick)):
-                continue
-            depth = abs(face_z_level - f_z)
-            if not (0.5 <= depth < sheet_thick):
-                continue
-
-            p_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in face.outerWire().Edges()]
-            if not p_edges:
-                continue
-            raw_p = clean_polygon_points(discrete_edges(p_edges))
-            if len(raw_p) < 4:
-                continue
-
-            try:
-                poly = repair_geometry(Polygon(raw_p))
-                if poly is None:
-                    continue
-                centroid = poly.centroid
-                signature = (round(centroid.x, 3), round(centroid.y, 3), round(depth, 3), round(poly.area, 3))
-                if signature in pocket_signatures:
-                    continue
-                pocket_signatures.add(signature)
-                features.append({"type": "CNC_POCKET", "edges": p_edges, "depth": depth})
-            except Exception:
-                continue
-
-        bbox = target_face.BoundingBox()
-        return {
-            "name": os.path.splitext(filename)[0],
-            "width": bbox.xlen,
-            "height": bbox.ylen,
-            "outer_edges": outer_edges,
-            "features": features,
-            "origin_x": face_center.x,
-            "origin_y": face_center.y
-        }
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-
-# ============================================================
-# 9. NESTING (KHOÉT THỦNG LÒNG PHÔI ĐỂ TẬN DỤNG DIỆN TÍCH)
+# 7. NESTING ENGINE
 # ============================================================
 def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_val):
     sheet_bound = Polygon([(margin_val, margin_val), (sheet_w - margin_val, margin_val), 
@@ -354,15 +342,12 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
 
     for part in sorted_parts:
         raw_points = clean_polygon_points(discrete_edges(part["outer_edges"]))
-        if len(raw_points) < 4:
-            continue
+        if len(raw_points) < 4: continue
         poly_geom = extract_largest_polygon(repair_geometry(Polygon(raw_points)))
-        if poly_geom is None:
-            continue
+        if poly_geom is None: continue
 
         buffered_poly = extract_largest_polygon(repair_geometry(poly_geom.buffer(offset_val, resolution=16, join_style=JOIN_STYLE.round)))
-        if buffered_poly is None:
-            continue
+        if buffered_poly is None: continue
 
         min_x, min_y, _, _ = buffered_poly.bounds
         normalized_poly = translate(buffered_poly, xoff=-min_x, yoff=-min_y)
@@ -375,7 +360,6 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
         for sheet_idx, sheet_data in enumerate(sheets):
             placed_union = sheet_data["placed_union_geom"]
             anchors = [(margin_val, margin_val)]
-            
             for pb in sheet_data["placed_buffered_polygons"]:
                 b = pb.bounds
                 anchors.extend([(b[2], b[1]), (b[0], b[3]), (b[2], b[3])])
@@ -388,10 +372,8 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
                     dx, dy = anchor_x - r_min_x, anchor_y - r_min_y
                     candidate = translate(rotated_poly, xoff=dx, yoff=dy)
 
-                    if not sheet_bound.covers(candidate):
-                        continue
-                    if placed_union is not None and candidate.intersects(placed_union):
-                        continue
+                    if not sheet_bound.covers(candidate): continue
+                    if placed_union is not None and candidate.intersects(placed_union): continue
 
                     bounds = candidate.bounds
                     score = bounds[0] + bounds[1] * 2.5
@@ -409,10 +391,7 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
                 "placed_polygon": best_pos["raw_trans"], "dx": best_pos["dx"], "dy": best_pos["dy"], "angle": best_pos["angle"]
             })
             sheets[target_sheet_idx]["placed_buffered_polygons"].append(best_pos["cand_poly"])
-            if sheets[target_sheet_idx]["placed_union_geom"] is None:
-                sheets[target_sheet_idx]["placed_union_geom"] = best_pos["cand_poly"]
-            else:
-                sheets[target_sheet_idx]["placed_union_geom"] = sheets[target_sheet_idx]["placed_union_geom"].union(best_pos["cand_poly"])
+            sheets[target_sheet_idx]["placed_union_geom"] = sheets[target_sheet_idx]["placed_union_geom"].union(best_pos["cand_poly"])
         else:
             new_sheet_id = len(sheets) + 1
             dx, dy = margin_val - min_x, margin_val - min_y
@@ -426,118 +405,67 @@ def execute_production_nesting(parts_list, sheet_w, sheet_h, offset_val, margin_
     return sheets
 
 # ============================================================
-# 10. TANGENT / ARC-LENGTH UTILITIES
+# 8. TOOLPATH ENGINE & G-CODE GENERATION
 # ============================================================
 def cumulative_lengths(pts):
     lengths = [0.0]
     total = 0.0
     for i in range(len(pts) - 1):
-        p1 = np.array(pts[i], dtype=float)
-        p2 = np.array(pts[i + 1], dtype=float)
-        total += np.linalg.norm(p2 - p1)
+        total += np.linalg.norm(np.array(pts[i+1]) - np.array(pts[i]))
         lengths.append(total)
     return lengths, total
 
-# ============================================================
-# 11. TOOLPATH (CẢI TIẾN: SẠCH SÀN POCKET TRÁNH ĐỂ LẠI LÕI)
-# ============================================================
 def get_true_offset_toolpath(edges, op_type, tool_radius):
     raw_pts = discrete_edges(edges)
     cleaned = clean_polygon_points(raw_pts)
-    if len(cleaned) < 4:
-        return []
-
-    if op_type == "CNC_INNER_CUT":
-        cleaned = apply_t_bone_relief(cleaned, tool_radius)
+    if len(cleaned) < 4: return []
+    if op_type == "CNC_INNER_CUT": cleaned = apply_t_bone_relief(cleaned, tool_radius)
 
     poly = extract_largest_polygon(repair_geometry(Polygon(cleaned)))
-    if poly is None:
-        return []
+    if poly is None: return []
 
     if op_type == "CNC_OUTER_CUT":
         offset_geom = repair_geometry(poly.buffer(tool_radius, resolution=16, join_style=JOIN_STYLE.round))
         return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
-    
     elif op_type == "CNC_INNER_CUT":
         offset_geom = repair_geometry(poly.buffer(-tool_radius, resolution=16, join_style=JOIN_STYLE.round))
         return [list(offset_geom.exterior.coords)] if isinstance(offset_geom, Polygon) else []
-    
     elif op_type == "CNC_POCKET":
         paths = []
         stepover = tool_radius * 0.75
         current_offset = -tool_radius
-        
         while True:
             offset_geom = repair_geometry(poly.buffer(current_offset, resolution=16, join_style=JOIN_STYLE.round))
             if offset_geom is None or offset_geom.is_empty:
                 prev_offset = current_offset + stepover
                 last_valid_geom = repair_geometry(poly.buffer(prev_offset, resolution=16, join_style=JOIN_STYLE.round))
                 if last_valid_geom and not last_valid_geom.is_empty:
-                    centroid = last_valid_geom.centroid
-                    paths.append([(centroid.x, centroid.y), (centroid.x + 0.001, centroid.y)])
+                    paths.append([(last_valid_geom.centroid.x, last_valid_geom.centroid.y), (last_valid_geom.centroid.x+0.001, last_valid_geom.centroid.y)])
                 break
-                
-            if isinstance(offset_geom, Polygon):
-                paths.append(list(offset_geom.exterior.coords))
+            if isinstance(offset_geom, Polygon): paths.append(list(offset_geom.exterior.coords))
             elif isinstance(offset_geom, MultiPolygon):
-                for sub_p in offset_geom.geoms:
-                    paths.append(list(sub_p.exterior.coords))
+                for sub_p in offset_geom.geoms: paths.append(list(sub_p.exterior.coords))
             current_offset -= stepover
         return paths
     return []
 
-# ============================================================
-# 12. TAB GENERATION
-# ============================================================
 def build_tab_ranges(pts, tab_width, tab_count):
     _, total_len = cumulative_lengths(pts)
     tab_ranges = []
-    if total_len <= tab_width * tab_count * 2:
-        return tab_ranges
+    if total_len <= tab_width * tab_count * 2: return tab_ranges
     spacing = total_len / tab_count
     for i in range(tab_count):
         center = i * spacing + spacing / 2
-        start = max(0.0, center - tab_width / 2)
-        end = min(total_len, center + tab_width / 2)
-        tab_ranges.append((start, end))
+        tab_ranges.append((max(0.0, center - tab_width / 2), min(total_len, center + tab_width / 2)))
     return tab_ranges
 
-def get_tab_state(distance, tab_ranges):
-    for start, end in tab_ranges:
-        if start <= distance <= end:
-            return True
-    return False
-
-# ============================================================
-# 13. POST PROCESSOR
-# ============================================================
-def generate_program_header(dialect, spindle, safe_z):
-    header = []
-    if dialect in ["Fanuc / Syntec", "Weihong"]:
-        header.extend(["%", "G90 G21 G17 G40 G49 G80", "T1 M6", f"G43 H1 Z{safe_z:.3f}", f"S{int(spindle)} M3"])
-    else:
-        header.extend(["G90", "G21", "G17", f"M3 S{int(spindle)}", f"G0 Z{safe_z:.3f}"])
-    return header
-
-def generate_program_footer(dialect):
-    if dialect in ["Fanuc / Syntec", "Weihong"]:
-        return ["M5", "G49", "G0 Z25.000", "M30", "%"]
-    return ["M5", "M30"]
-
-# ============================================================
-# 14. TOOLPATH → G-CODE (CẢI TIẾN: LEAD-IN AN TOÀN TUYỆT ĐỐI)
-# ============================================================
 def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, feed, plunge, spindle, safe_z, enable_leadin, leadin_length, enable_ramping, enable_tabs, tab_width, tab_thick, tab_count, dialect):
     gcode = []
-    if len(toolpath_pts) < 2:
-        return gcode
-
+    if len(toolpath_pts) < 2: return gcode
     pts = list(toolpath_pts)
-    if np.allclose(pts[0], pts[-1]):
-        pts.pop()
+    if np.allclose(pts[0], pts[-1]): pts.pop()
     n_pts = len(pts)
-    if n_pts < 2:
-        return gcode
+    if n_pts < 2: return gcode
 
     lengths, total_len = cumulative_lengths(pts)
     tab_ranges = build_tab_ranges(pts, tab_width, tab_count) if (enable_tabs and op_type == "CNC_OUTER_CUT") else []
@@ -561,81 +489,75 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
     current_z = 0.0
     while current_z > -total_depth:
         current_z -= max_step
-        if current_z < -total_depth:
-            current_z = -total_depth
+        if current_z < -total_depth: current_z = -total_depth
         z_targets.append(current_z)
 
     previous_z = 0.0
-
     for pass_index, target_z in enumerate(z_targets):
         gcode.append(f"; --- PASS {pass_index + 1} TARGET Z = {target_z:.3f} ---")
         pass_depth = abs(target_z - previous_z)
 
         if enable_ramping and total_len > 0 and pass_depth > 0.01:
-            gcode.append("; CONTINUOUS SPIRAL RAMP ACTIVE")
             for i in range(n_pts + 1):
                 idx = i % n_pts
-                p_c = np.array(pts[idx], dtype=float)
                 dist_accum = (lengths[idx] if i < n_pts else total_len)
-                
-                ratio = dist_accum / total_len
-                z_ramp = previous_z - (pass_depth * ratio)
-
-                if get_tab_state(dist_accum, tab_ranges):
-                    tab_z_boundary = -total_depth + tab_thick
-                    if z_ramp < tab_z_boundary:
-                        z_ramp = tab_z_boundary
-
-                gcode.append(f"G1 X{p_c[0]:.3f} Y{p_c[1]:.3f} Z{z_ramp:.3f} F{feed}")
+                z_ramp = previous_z - (pass_depth * (dist_accum / total_len))
+                if tab_ranges and any(s <= dist_accum <= e for s, e in tab_ranges):
+                    tz = -total_depth + tab_thick
+                    if z_ramp < tz: z_ramp = tz
+                gcode.append(f"G1 X{pts[idx][0]:.3f} Y{pts[idx][1]:.3f} Z{z_ramp:.3f} F{feed}")
         else:
             for i in range(n_pts + 1):
                 idx = i % n_pts
-                p_c = np.array(pts[idx], dtype=float)
                 dist_accum = (lengths[idx] if i < n_pts else total_len)
                 z_flat = target_z
-
-                if get_tab_state(dist_accum, tab_ranges):
-                    tab_z_boundary = -total_depth + tab_thick
-                    if z_flat < tab_z_boundary:
-                        z_flat = tab_z_boundary
-
-                gcode.append(f"G1 X{p_c[0]:.3f} Y{p_c[1]:.3f} Z{z_flat:.3f} F{feed}")
-
+                if tab_ranges and any(s <= dist_accum <= e for s, e in tab_ranges):
+                    tz = -total_depth + tab_thick
+                    if z_flat < tz: z_flat = tz
+                gcode.append(f"G1 X{pts[idx][0]:.3f} Y{pts[idx][1]:.3f} Z{z_flat:.3f} F{feed}")
         previous_z = target_z
 
     gcode.append(f"G0 Z{safe_z:.3f}")
     return gcode
 
+def generate_program_header(dialect, spindle, safe_z):
+    if dialect in ["Fanuc / Syntec", "Weihong"]:
+        return ["%", "G90 G21 G17 G40 G49 G80", "T1 M6", f"G43 H1 Z{safe_z:.3f}", f"S{int(spindle)} M3"]
+    return ["G90", "G21", "G17", f"M3 S{int(spindle)}", f"G0 Z{safe_z:.3f}"]
+
+def generate_program_footer(dialect):
+    if dialect in ["Fanuc / Syntec", "Weihong"]: return ["M5", "G49", "G0 Z25.000", "M30", "%"]
+    return ["M5", "M30"]
+
 # ============================================================
-# 15. MAIN STREAMLIT APPLICATION ORCHESTRATION
+# 9. MAIN APP ORCHESTRATION
 # ============================================================
-uploaded_files = st.file_uploader("Tải lên bản vẽ kỹ thuật chi tiết (.STEP / .STP)", accept_multiple_files=True, type=["step", "stp"])
+uploaded_files = st.file_uploader("Tải lên bản vẽ thiết kế 3D toàn bộ khối tủ (.STEP / .STP)", accept_multiple_files=True, type=["step", "stp"])
 
 if uploaded_files:
-    parsed_parts = []
+    all_extracted_parts = []
     for f in uploaded_files:
-        with st.spinner(f"Đang phân tích dữ liệu cấu trúc: {f.name}"):
+        with st.spinner(f"🚀 Đang rã cụm lắp ráp & hạ phẳng khối 3D: {f.name}"):
             try:
-                part_data = process_cad_file_production(f.getvalue(), f.name, sheet_thickness, chord_tolerance)
-                parsed_parts.append(part_data)
-                st.success(f"Đã nạp thành công: {part_data['name']} ({part_data['width']:.1f}x{part_data['height']:.1f} mm)")
+                # Gọi hàm phân rã thông minh mới lập trình
+                parts = process_full_assembly_step(f.getvalue(), f.name, sheet_thickness, chord_tolerance)
+                all_extracted_parts.extend(parts)
+                st.success(f"✅ Rã thành công! Tìm thấy **{len(parts)}** tấm ván đủ điều kiện cắt từ tệp {f.name}.")
             except Exception as e:
-                st.error(f"Lỗi phân tích tệp {f.name}: {str(e)}")
+                st.error(f"❌ Thất bại khi phân rã tệp {f.name}: {str(e)}")
 
-    if parsed_parts:
-        st.subheader("📦 KẾT QUẢ SẮP XẾP TỰ ĐỘNG NÂNG CẤP (HOLES LAYER OPTIMIZED)")
-        nested_sheets = execute_production_nesting(parsed_parts, sheet_W, sheet_H, total_offset, margin)
-        
-        st.metric("Tổng số lượng tấm ván cần dùng", len(nested_sheets))
+    if all_extracted_parts:
+        st.subheader("📦 KẾT QUẢ SẮP XẾP TỰ ĐỘNG - NESTING LAYOUT")
+        nested_sheets = execute_production_nesting(all_extracted_parts, sheet_W, sheet_H, total_offset, margin)
+        st.metric("Tổng số lượng tấm ván gốc cần sử dụng", len(nested_sheets))
 
         for sheet in nested_sheets:
-            st.write(f"### 📋 Tấm phôi số #{sheet['sheet_id']}")
-            
+            st.write(f"### 📋 Sơ đồ cắt tấm phôi thứ #{sheet['sheet_id']}")
             fig, ax = plt.subplots(figsize=(12, 6))
             ax.set_xlim(0, sheet_W)
             ax.set_ylim(0, sheet_H)
             ax.add_patch(mpatches.Rectangle((0, 0), sheet_W, sheet_H, color="darkgrey", alpha=0.3, label="Khổ ván gốc"))
-            ax.add_patch(mpatches.Rectangle((margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, fill=False, linestyle="--", color="red", label="Vùng cắt an toàn"))
+            ax.add_patch(mpatches.Rectangle((margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, fill=False, linestyle="--", color="red"))
             
             all_gcode_blocks = generate_program_header(cnc_dialect, t1_spindle, safe_Z)
 
@@ -646,13 +568,13 @@ if uploaded_files:
                 x, y = poly.exterior.xy
                 ax.plot(x, y, "b-", linewidth=2)
                 ax.fill(x, y, "skyblue", alpha=0.5)
-                ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=9, weight='bold')
+                ax.text(poly.centroid.x, poly.centroid.y, f"P{p_idx+1}: {ref['name']}", ha='center', va='center', fontsize=8, weight='bold')
 
                 trans_outer_edges = transform_edges_production(ref["outer_edges"], placed["dx"], placed["dy"], placed["angle"], ref["origin_x"], ref["origin_y"])
                 outer_paths = get_true_offset_toolpath(trans_outer_edges, "CNC_OUTER_CUT", tool_radius)
                 
                 for path in outer_paths:
-                    if len(path) >= 2:  # BẢO VỆ CHỐNG ZIP_EMPTY ERROR
+                    if len(path) >= 2:
                         px, py = zip(*path)
                         ax.plot(px, py, "g--", alpha=0.8)
                     all_gcode_blocks.extend(generate_gcode_for_toolpath(
@@ -666,7 +588,7 @@ if uploaded_files:
                     feat_paths = get_true_offset_toolpath(trans_feat_edges, feat["type"], tool_radius)
                     
                     for path in feat_paths:
-                        if len(path) >= 2:  # BẢO VỆ CHỐNG ZIP_EMPTY ERROR
+                        if len(path) >= 2:
                             px, py = zip(*path)
                             ax.plot(px, py, "m:", alpha=0.7)
                         all_gcode_blocks.extend(generate_gcode_for_toolpath(
@@ -678,12 +600,12 @@ if uploaded_files:
             all_gcode_blocks.extend(generate_program_footer(cnc_dialect))
             ax.set_aspect('equal', adjustable='box')
             st.pyplot(fig)
-            plt.close(fig)  # GIẢI PHÓNG BỘ NHỚ RAM TRÊN SERVER CHẠY STREAMLIT
+            plt.close(fig)
 
             gcode_txt = "\n".join(all_gcode_blocks)
             st.download_button(
-                label=f"💾 Tải xuống mã máy G-Code Tấm #{sheet['sheet_id']}",
+                label=f"💾 Tải xuống G-Code Tấm #{sheet['sheet_id']}",
                 data=gcode_txt,
-                file_name=f"CAM_Engine_Industrial_Sheet_{sheet['sheet_id']}.nc",
+                file_name=f"CAM_Engine_Full_Assembly_Sheet_{sheet['sheet_id']}.nc",
                 mime="text/plain"
             )
