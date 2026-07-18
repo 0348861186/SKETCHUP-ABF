@@ -283,10 +283,12 @@ def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
             top_faces = all_faces
 
         target_face = max(top_faces, key=lambda f: f.Area())
-        # Lấy tâm và pháp tuyến của mặt phẳng mục tiêu để dựng Plane chuẩn quy chuẩn CadQuery
+        
+        # FIX LỖI OCC GP_ EXPECTED: Khởi tạo Plane thông qua cấu trúc Origin và Normal chuẩn hình học
         face_center = target_face.Center()
         face_normal = target_face.normalAt(face_center)
         ref_plane = cq.Plane(origin=face_center, normal=face_normal)
+        
         face_z_level = face_center.z
         outer_wire = target_face.outerWire()
         outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
@@ -334,8 +336,8 @@ def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
             "height": bbox.ylen,
             "outer_edges": outer_edges,
             "features": features,
-            "origin_x": target_face.Center().x,
-            "origin_y": target_face.Center().y
+            "origin_x": face_center.x,
+            "origin_y": face_center.y
         }
     finally:
         if temp_path and os.path.exists(temp_path):
