@@ -191,17 +191,19 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
 
         imported_shape = cq.importers.importStep(temp_path)
         
-        # SỬA LỖI Ở ĐÂY: Kiểm tra kiểu dữ liệu trả về của imported_shape để lấy danh sách các Solids hợp lệ
+        # 1. Lấy danh sách các khối nguyên bản
         if hasattr(imported_shape, "solids"):
-            solids = imported_shape.solids().vals()
+            raw_solids = imported_shape.solids().vals()
         elif hasattr(imported_shape, "Solids"):
-            solids = imported_shape.Solids()
+            raw_solids = imported_shape.Solids()
         else:
-            # Trường hợp là iterable trực tiếp
-            solids = list(imported_shape)
+            raw_solids = list(imported_shape)
             
-        if not solids:
+        if not raw_solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
+            
+        # ĐƯỢC SỬA TẠI ĐÂY: Ép tất cả các khối về chuẩn cq.Solid của CadQuery để luôn sử dụng được .faces() và .vals()
+        solids = [cq.Solid(s) if not isinstance(s, cq.Solid) else s for s in raw_solids]
         
         st.info(f"🔎 Đã phát hiện tổng cộng **{len(solids)}** chi tiết trong mô hình lắp ráp.")
 
@@ -209,11 +211,8 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             if solid.Area() < 500: 
                 continue
 
-            # Xử lý lấy danh sách mặt (Faces) tương thích với cả CQ Solid lẫn TopoDS_Solid
-            if hasattr(solid, "faces"):
-                faces = solid.faces().vals()
-            else:
-                faces = solid.Faces()
+            # Lúc này solid chắc chắn là chuẩn cq.Solid, gọi lệnh an toàn 100%
+            faces = solid.faces().vals()
                 
             plane_faces = [f for f in faces if f.geomType() == "PLANE"]
             if not plane_faces:
@@ -281,7 +280,6 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             os.remove(temp_path)
             
     return parsed_parts
-
 # ============================================================
 # 6. TRANSFORM CAD EDGE & RELIEF UTILITIES
 # ============================================================
