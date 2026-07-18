@@ -283,8 +283,11 @@ def process_cad_file_production(file_bytes, filename, sheet_thick, tol_val):
             top_faces = all_faces
 
         target_face = max(top_faces, key=lambda f: f.Area())
-        ref_plane = cq.Plane(target_face)
-        face_z_level = target_face.Center().z
+        # Lấy tâm và pháp tuyến của mặt phẳng mục tiêu để dựng Plane chuẩn quy chuẩn CadQuery
+        face_center = target_face.Center()
+        face_normal = target_face.normalAt(face_center)
+        ref_plane = cq.Plane(origin=face_center, normal=face_normal)
+        face_z_level = face_center.z
         outer_wire = target_face.outerWire()
         outer_edges = [get_local_coordinates(edge, ref_plane, tol_val) for edge in outer_wire.Edges()]
 
