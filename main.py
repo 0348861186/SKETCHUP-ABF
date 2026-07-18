@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+import matplotlib.patches mpatches
 
 # ============================================================
 # CAD / CAM INDUSTRIAL CORE
@@ -76,7 +76,11 @@ tab_thickness = st.sidebar.number_input("Độ dày mối nối Tab (mm)", min_v
 tab_count_default = st.sidebar.slider("Số lượng Tab / chi tiết", min_value=2, max_value=8, value=4)
 
 st.sidebar.markdown("### ⚙ POST-PROCESSOR")
-cnc_dialect = st.sidebar.selectbox("Hệ điều hành máy CNC", ["Fanuc / Syntec", "Mach3 / Grbl", "Weihong"])
+# ĐÃ BỔ SUNG: Thêm lựa chọn "UGS (Universal Gcode Sender)" vào đây
+cnc_dialect = st.sidebar.selectbox(
+    "Hệ điều hành / Phần mềm máy CNC", 
+    ["Fanuc / Syntec", "Mach3 / Grbl", "UGS (Universal Gcode Sender)", "Weihong"]
+)
 safe_Z = st.sidebar.number_input("Safe Z (mm)", min_value=1.0, value=25.0, step=1.0)
 thru_overlap = st.sidebar.number_input("Độ sâu cắt xuyên thêm (mm)", min_value=0.0, value=0.5, step=0.1)
 
@@ -180,13 +184,9 @@ def clean_polygon_points(points, tolerance=0.01):
     return cleaned
 
 # ============================================================
-# 🔥 5. IMPROVED T-BONE RELIEF (FIXED & STABLE)
+# 5. IMPROVED T-BONE RELIEF (FIXED & STABLE)
 # ============================================================
 def apply_t_bone_relief(polygon_points, tool_radius):
-    """
-    Tạo rãnh T-Bone chuẩn tại các góc vuông lõm (Internal Corners).
-    Đảm bảo bán kính dao đi sâu vào góc giúp lắp ráp mộng gỗ không bị cấn.
-    """
     if len(polygon_points) < 4:
         return polygon_points
         
@@ -199,7 +199,6 @@ def apply_t_bone_relief(polygon_points, tool_radius):
     if not isinstance(poly, Polygon) or poly.is_empty:
         return polygon_points
 
-    # Đồng bộ chiều ngược kim đồng hồ (CCW)
     if not poly.exterior.is_ccw:
         pts.reverse()
         
@@ -226,7 +225,6 @@ def apply_t_bone_relief(polygon_points, tool_radius):
         dot = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
         angle = math.acos(dot)
         
-        # Tích vô hướng hướng trục Z để xác định góc lõm hay lồi
         cross_z = v1_u[0] * v2_u[1] - v1_u[1] * v2_u[0]
         is_concave = cross_z > 0.001
         is_right_angle = abs(angle - math.pi / 2.0) < math.radians(10)
@@ -234,16 +232,13 @@ def apply_t_bone_relief(polygon_points, tool_radius):
         result.append(tuple(p_curr))
         
         if is_concave and is_right_angle:
-            # Tính toán vector phân giác đi vào lòng chi tiết
             bisector = v1_u + v2_u
             norm_b = np.linalg.norm(bisector)
             if norm_b > 1e-5:
                 bisector_u = bisector / norm_b
-                # Phần mở rộng cấu trúc T-bone chéo góc vuông
                 relief_distance = tool_radius
                 relief_point = p_curr + bisector_u * relief_distance
                 
-                # Tạo điểm mở rộng hình học chữ T an toàn
                 result.append(tuple(relief_point))
                 result.append(tuple(p_curr))
                 
@@ -413,24 +408,16 @@ def get_true_offset_toolpath(edges, op_type, tool_radius):
 # 🔥 8 & 9 & 10. REAL RAMP, LEAD-IN & TABS G-CODE GENERATOR
 # ============================================================
 def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, feed, plunge, spindle, safe_z, r_angle, t_width, t_thick, t_count):
-    """
-    Hàm xuất G-code Công Nghiệp thực tế:
-    1. Lead-in: Điểm tiếp cận dao tiếp tuyến bên ngoài hoặc vuông góc biên dạng.
-    2. Real Ramp: Xuống dao dốc xiên (Zigzag/Spiral Z) theo góc cài đặt, không đâm thẳng thẳng đứng phá dao.
-    3. Real 3D Tabs: Tại vị trí Tab, dao sẽ nhấc Z lên vị trí (total_depth - tab_thickness) và hạ xuống lại khi qua khỏi tab.
-    """
     gcode = []
     if len(toolpath_pts) < 2:
         return gcode
 
-    # Bỏ điểm trùng lặp cuối của vòng khép kín để xử lý mảng rời rạc phẳng
     pts = list(toolpath_pts)
     if np.allclose(pts[0], pts[-1]):
         pts.pop()
     
     n_pts = len(pts)
     
-    # Tính toán các vị trí phân bổ cấu trúc Tabs dọc biên dạng chi tiết
     tab_segments = []
     if enable_tabs and op_type == "CNC_OUTER_CUT" and n_pts > 4:
         step_dist = n_pts // t_count
@@ -438,29 +425,24 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
             t_idx = (idx * step_dist) % n_pts
             tab_segments.append(t_idx)
 
-    # Khởi động trục chính và di chuyển tới SafeZ
     gcode.append(f"; --- BAT DAU CHUONG TRINH {op_type} ---")
     gcode.append(f"M3 S{int(spindle)}")
     
-    # Tính toán cấu trúc đoạn Vào dao Lead-in hình học
     start_pt = np.array(pts[0])
     next_pt = np.array(pts[1])
     vec_dir = next_pt - start_pt
     norm_v = np.linalg.norm(vec_dir)
     
     if norm_v > 1e-5 and enable_leadin:
-        # Tạo vector vuông góc hướng ra bên ngoài biên dạng
         perp_vec = np.array([-vec_dir[1], vec_dir[0]]) / norm_v
         leadin_start = start_pt + perp_vec * leadin_length
         gcode.append(f"G0 X{leadin_start[0]:.3f} Y{leadin_start[1]:.3f} Z{safe_z:.3f}")
         gcode.append(f"G1 Z0.0 F{plunge}")
-        # Di chuyển vào vị trí xuất phát chính thức
         gcode.append(f"G1 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} F{feed}")
     else:
         gcode.append(f"G0 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} Z{safe_z:.3f}")
         gcode.append(f"G1 Z0.0 F{plunge}")
 
-    # Tính toán phân lớp cắt Z-Levels
     z_layers = []
     current_z = 0.0
     while current_z > -total_depth:
@@ -469,17 +451,14 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
             current_z = -total_depth
         z_layers.append(current_z)
 
-    # Vòng lặp gia công theo lớp Z (Lát cắt chi tiết)
     for l_idx, target_z in enumerate(z_layers):
         gcode.append(f"; --- Lat cat lop Z = {target_z:.3f} ---")
         
-        # 1. LOGIC XỬ LÝ REAL RAMP (XUỐNG DAO CHÉO) Ở ĐẦU MỖI LỚP CẮT
         if enable_ramping and l_idx > 0:
             prev_z = z_layers[l_idx - 1]
             z_dist = abs(target_z - prev_z)
             ramp_dist = z_dist / math.tan(math.radians(r_angle))
             
-            # Phân bổ đoạn dốc xiên chéo chạy dọc theo các điểm đầu của chu vi
             accum_dist = 0.0
             r_i = 0
             while accum_dist < ramp_dist and r_i < n_pts:
@@ -489,18 +468,15 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
                 accum_dist += d
                 r_i += 1
             
-            # Xuất mã lệnh nội suy nội tuyến Ramp
             gcode.append(f"; Thuc hien xuong dao Ramp cheo (Goc {ramp_angle} do)")
             gcode.append(f"G1 X{pts[min(r_i, n_pts-1)][0]:.3f} Y{pts[min(r_i, n_pts-1)][1]:.3f} Z{target_z:.3f} F{feed}")
         else:
             gcode.append(f"G1 Z{target_z:.3f} F{plunge}")
 
-        # 2. CHẠY BIÊN DẠNG CHÍNH VÀ XỬ LÝ 3D TABS THỰC TẾ
         for i in range(n_pts + 1):
             curr_idx = i % n_pts
             pt = pts[curr_idx]
             
-            # Kiểm tra xem điểm này có cấu hình làm Cầu kết nối phôi (Tab) không
             if curr_idx in tab_segments and target_z <= -(total_depth - t_thick):
                 tab_z = -(total_depth - t_thick)
                 gcode.append(f"; --- Bat dau cau giu khoi (3D TAB) ---")
@@ -510,7 +486,6 @@ def generate_gcode_for_toolpath(toolpath_pts, op_type, total_depth, max_step, fe
             else:
                 gcode.append(f"G1 X{pt[0]:.3f} Y{pt[1]:.3f} F{feed}")
                 
-    # Kết thúc đường cắt: Nhấc dao an toàn
     gcode.append(f"G0 Z{safe_z:.3f}")
     return gcode
 
@@ -535,7 +510,6 @@ if uploaded_files:
         st.markdown("---")
         st.subheader("📦 KẾT QUẢ XẾP PHÔI TỰ ĐỘNG (AUTOMATIC NESTING)")
         
-        # Tiến hành sắp xếp tối ưu hóa không gian phôi dựa vào khoảng cách dao & spacing
         sheets_result = execute_production_nesting(loaded_parts, sheet_W, sheet_H, total_offset, margin)
         
         st.metric("Tổng số tấm ván (Plates) yêu cầu", len(sheets_result))
@@ -561,13 +535,11 @@ if uploaded_files:
                 dx, dy, angle = p_info["dx"], p_info["dy"], p_info["angle"]
                 ox, oy = ref["origin_x"], ref["origin_y"]
                 
-                # Biểu diễn đồ họa Polygon biên dạng gốc trên giao diện
                 ext_coords = list(p_info["placed_polygon"].exterior.coords)
                 xs, ys = zip(*ext_coords)
                 ax.plot(xs, ys, label=f"{ref['name']} ({p_idx})", lw=1.5)
                 ax.fill(xs, ys, alpha=0.3)
                 
-                # 1. Tính toán & Xuất mã cho Đường cắt lỗ bên trong (Inner Cuts) + T-Bone Relief
                 for feat in ref["features"]:
                     if feat["type"] == "CNC_INNER_CUT":
                         trans_edges = []
@@ -584,7 +556,6 @@ if uploaded_files:
                         )
                         sheet_gcode.extend(f_gcode)
                 
-                # 2. Tính toán & Xuất mã cho Đường cắt bao biên chi tiết (Outer Cut) + Lead-in + Ramp + Tabs
                 outer_trans_edges = []
                 for edge in ref["outer_edges"]:
                     if edge["type"] == "LINE":
@@ -594,7 +565,6 @@ if uploaded_files:
                         
                 outer_toolpath = get_true_offset_toolpath(outer_trans_edges, "CNC_OUTER_CUT", tool_radius)
                 
-                # Vẽ mô phỏng đường chạy dao thực tế màu đỏ đứt nét trên Streamlit Plot
                 if outer_toolpath:
                     txs, tys = zip(*outer_toolpath)
                     ax.plot(txs, tys, 'r--', lw=1.0, alpha=0.7)
@@ -611,7 +581,6 @@ if uploaded_files:
             
             st.pyplot(fig)
             
-            # Cung cấp nút tải xuống G-code trực tiếp cho người vận hành máy
             st.download_button(
                 label=f"💾 Tải xuống mã ATC G-Code cho Tấm ván số {sh['sheet_id']}",
                 data=full_sheet_gcode_str,
