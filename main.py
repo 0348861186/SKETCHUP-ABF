@@ -189,31 +189,31 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_file.write(file_bytes)
             temp_path = temp_file.name
 
-        imported_shape = cq.importers.importStep(temp_path)
+        # Giải pháp tối ưu: Đọc file trực tiếp thành các Shape của CadQuery 
+        # Cách này bỏ qua lớp bọc bọc phức tạp của cụm Assembly/Compound
+        raw_shapes = cq.Shape.get_shapes_from_file(temp_path)
         
-        # 1. Lấy danh sách các khối nguyên bản
-        if hasattr(imported_shape, "solids"):
-            raw_solids = imported_shape.solids().vals()
-        elif hasattr(imported_shape, "Solids"):
-            raw_solids = imported_shape.Solids()
-        else:
-            raw_solids = list(imported_shape)
-            
-        if not raw_solids:
+        # Lọc và ép toàn bộ các hình khối tìm được về định dạng chuẩn cq.Solid
+        solids = []
+        for shape in raw_shapes:
+            if shape.ShapeType() == "Solid":
+                solids.append(cq.Solid(shape.wrapped))
+            elif shape.ShapeType() == "Compound":
+                # Nếu bên trong chứa cụm nhỏ hơn, bóc tách tiếp các Solids con
+                for sub_shape in shape.Solids():
+                    solids.append(cq.Solid(sub_shape.wrapped))
+                    
+        if not solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
-            
-        # ĐƯỢC SỬA TẠI ĐÂY: Ép tất cả các khối về chuẩn cq.Solid của CadQuery để luôn sử dụng được .faces() và .vals()
-        solids = [cq.Solid(s) if not isinstance(s, cq.Solid) else s for s in raw_solids]
         
         st.info(f"🔎 Đã phát hiện tổng cộng **{len(solids)}** chi tiết trong mô hình lắp ráp.")
 
         for idx, solid in enumerate(solids):
             if solid.Area() < 500: 
-                continue
+                continue  # Sửa từ return thành continue để tránh bỏ sót các tấm ván phía sau
 
-            # Lúc này solid chắc chắn là chuẩn cq.Solid, gọi lệnh an toàn 100%
+            # Lúc này solid chắc chắn là đối tượng cq.Solid chuẩn, gọi .vals() an toàn 100%
             faces = solid.faces().vals()
-                
             plane_faces = [f for f in faces if f.geomType() == "PLANE"]
             if not plane_faces:
                 continue
