@@ -178,7 +178,7 @@ def clean_polygon_points(points, tolerance=0.01):
     return cleaned
 
 # ============================================================
-# 5. ASSEMBLY EXPLODER (SỬA LỖI ĐỌC FILE STEP VÀ TRÍCH XUẤT SOLID)
+# 5. ASSEMBLY EXPLODER (FIXED ĐỂ BÓC TÁCH KHỐI RẮN 100%)
 # ============================================================
 def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
     temp_path = None
@@ -189,33 +189,26 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_file.write(file_bytes)
             temp_path = temp_file.name
 
-        # Đọc file STEP bằng hàm chuẩn của CadQuery (trả về đối tượng CQ/Workplane)
+        # Đọc file bằng bộ nạp chuẩn
         imported_shape = cq.importers.importStep(temp_path)
         
-        # Trích xuất danh sách các đối tượng hình học thô (wrapped) bên dưới
+        # Lấy danh sách các khối rắn (Solids) một cách an toàn bằng phương thức cốt lõi của CadQuery
         raw_solids = []
-        if hasattr(imported_shape, "objects"):
-            for obj in imported_shape.objects:
-                if hasattr(obj, "Solids"):
-                    raw_solids.extend(obj.Solids())
-                elif hasattr(obj, "ShapeType") and obj.ShapeType() == "Solid":
-                    raw_solids.append(obj)
-        
-        # Nếu không lấy được theo cấu trúc trên, dùng phương thức tìm kiếm mặc định
-        if not raw_solids:
-            if hasattr(imported_shape, "solids"):
-                # Lấy danh sách CQ con, rồi lấy đối tượng hình học thô bên dưới (.val())
-                raw_solids = [s.val() for s in imported_shape.solids().vals()]
-            else:
-                raw_solids = imported_shape.Solids()
+        if hasattr(imported_shape, "solids"):
+            # Lấy các phần tử thông qua đối tượng lặp (iterable) thay vì gọi .vals()
+            raw_solids = [s for s in imported_shape.solids()]
+        else:
+            raw_solids = imported_shape.Solids()
 
         if not raw_solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
         
-        # Bọc toàn bộ các đối tượng thô thành lớp cao cấp cq.Solid để có đầy đủ thuộc tính .faces().vals()
+        # Bọc các khối thành cq.Solid để đảm bảo tính nhất quán của API nâng cao
         solids = []
         for s in raw_solids:
-            if hasattr(s, "wrapped"):
+            if hasattr(s, "val"):
+                solids.append(cq.Solid(s.val().wrapped))
+            elif hasattr(s, "wrapped"):
                 solids.append(cq.Solid(s.wrapped))
             else:
                 solids.append(cq.Solid(s))
@@ -226,8 +219,8 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             if solid.Area() < 500: 
                 continue  
 
-            # Lúc này solid chắc chắn là cq.Solid chuẩn, gọi .vals() an toàn 100%
-            faces = solid.faces().vals()
+            # Lúc này solid chắc chắn là cq.Solid chuẩn, trích xuất các mặt phẳng bằng cấu trúc lặp an toàn
+            faces = [f for f in solid.faces()]
             plane_faces = [f for f in faces if f.geomType() == "PLANE"]
             if not plane_faces:
                 continue
