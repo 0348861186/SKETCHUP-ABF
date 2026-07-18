@@ -192,13 +192,11 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
        imported_shape = cq.importers.importStep(temp_path)
         
         solids = []
-        # Duyệt qua các đối tượng trong Workplane
         for obj in imported_shape.objects:
             if hasattr(obj, "ShapeType"):
                 if obj.ShapeType() == "Solid":
                     solids.append(obj)
                 elif obj.ShapeType() == "Compound":
-                    # Đối với Compound của CadQuery, dùng .Solids() để lấy danh sách khối con
                     solids.extend([s for s in obj.Solids()])
             elif hasattr(obj, "Solids"):
                 solids.extend([s for s in obj.Solids()])
