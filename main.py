@@ -190,7 +190,8 @@ def process_full_assembly_step(file_bytes, filename, std_thickness, tol_val):
             temp_path = temp_file.name
 
         imported_shape = cq.importers.importStep(temp_path)
-        solids = [s for s in imported_shape.Solids()]
+        # Lấy trực tiếp các đối tượng Solid nằm bên trong Workplane
+        solids = [obj for obj in imported_shape.objects if obj.ShapeType() == "Solid"]
         if not solids:
             raise ValueError("Không tìm thấy khối rắn (Solids) hợp lệ trong tệp 3D.")
         
