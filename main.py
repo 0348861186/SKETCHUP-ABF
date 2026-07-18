@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.patches mpatches
+import matplotlib.patches as mpatches
 
 # ============================================================
 # CAD / CAM CORE
