@@ -485,7 +485,7 @@ def apply_t_bone_relief(
 
     if not isinstance(poly, Polygon):
 
-        return polygon_points
+        return 0
 
     # Đảm bảo CCW
     if not poly.exterior.is_ccw:
@@ -792,7 +792,11 @@ def process_cad_file_production(
 
             "outer_edges": outer_edges,
 
-            "features": features
+            "features": features,
+            
+            "origin_x": target_face.Center().x,
+            
+            "origin_y": target_face.Center().y
 
         }
 
@@ -1874,1678 +1878,225 @@ def generate_dxf_industrial_layered(
             )
 
     border = [
-
-        (
-            0,
-            0
-        ),
-
-        (
-            sheet_w,
-            0
-        ),
-
-        (
-            sheet_w,
-            sheet_h
-        ),
-
-        (
-            0,
-            sheet_h
-        ),
-
-        (
-            0,
-            0
-        )
-
+        (0.0, 0.0),
+        (sheet_w, 0.0),
+        (sheet_w, sheet_h),
+        (0.0, sheet_h),
+        (0.0, 0.0)
     ]
-
-    for p1, p2 in zip(
-
-        border[:-1],
-
-        border[1:]
-
-    ):
-
+    
+    for p1, p2 in zip(border[:-1], border[1:]):
         msp.add_line(
-
-            p1,
-
-            p2,
-
-            dxfattribs={
-
-                "layer":
-                "CNC_SHEET_BORDER"
-
-            }
-
+            p1, 
+            p2, 
+            dxfattribs={"layer": "CNC_SHEET_BORDER"}
         )
-
-    for placed in sheet_data["parts"]:
-
-        part = placed[
-            "part_ref"
-        ]
-
-        dx = placed[
-            "dx"
-        ]
-
-        dy = placed[
-            "dy"
-        ]
-
-        angle = placed[
-            "angle"
-        ]
-
-        ox, oy = placed[
-            "original_offset"
-        ]
-
-        for edge in part[
-            "outer_edges"
-        ]:
-
+        
+    for p_data in sheet_data["parts"]:
+        part = p_data["part_ref"]
+        dx, dy, angle = p_data["dx"], p_data["dy"], p_data["angle"]
+        ox = part.get("origin_x", 0.0)
+        oy = part.get("origin_y", 0.0)
+        
+        for edge in part["outer_edges"]:
             write_edge_to_dxf(
-
-                msp,
-
-                edge,
-
-                "CNC_OUTER_CUT",
-
-                dx,
-
-                dy,
-
-                angle,
-
-                ox,
-
-                oy
-
+                msp, edge, "CNC_OUTER_CUT", 
+                dx, dy, angle, ox, oy
             )
-
-        for feat in part[
-            "features"
-        ]:
-
-            for edge in feat[
-                "edges"
-            ]:
-
+            
+        for feat in part["features"]:
+            for edge in feat["edges"]:
                 write_edge_to_dxf(
-
-                    msp,
-
-                    edge,
-
-                    feat[
-                        "type"
-                    ],
-
-                    dx,
-
-                    dy,
-
-                    angle,
-
-                    ox,
-
-                    oy
-
+                    msp, edge, feat["type"], 
+                    dx, dy, angle, ox, oy
                 )
-
-    out = io.StringIO()
-
-    doc.write(
-        out
-    )
-
-    return out.getvalue()
+                
+    out_buf = io.StringIO()
+    doc.write(out_buf)
+    return out_buf.getvalue()
 
 
 # ============================================================
-# 14. TOOLPATH HELPERS
+# 14. G-CODE GENERATION ENGINE
 # ============================================================
 
-def distance_between(
-    p1,
-    p2
+def generate_sheet_gcode(
+    sheet_data, 
+    sheet_thick, 
+    safe_z, 
+    thru_z, 
+    stepdown, 
+    feed, 
+    spindle, 
+    dialect
 ):
-
-    return math.hypot(
-
-        p2[0] - p1[0],
-
-        p2[1] - p1[1]
-
-    )
-
-
-def interpolate_point(
-    p1,
-    p2,
-    distance
-):
-
-    segment_length = distance_between(
-        p1,
-        p2
-    )
-
-    if segment_length <= 1e-6:
-
-        return p1
-
-    ratio = (
-        distance
-        /
-        segment_length
-    )
-
-    ratio = max(
-        0.0,
-        min(
-            1.0,
-            ratio
-        )
-    )
-
-    return (
-
-        p1[0]
-        +
-        (
-            p2[0]
-            -
-            p1[0]
-        )
-        *
-        ratio,
-
-        p1[1]
-        +
-        (
-            p2[1]
-            -
-            p1[1]
-        )
-        *
-        ratio
-
-    )
-
-
-def create_tab_positions(
-    points,
-    tab_count
-):
-
-    if len(points) < 4:
-
-        return []
-
-    segments = []
-
-    total_length = 0.0
-
-    for i in range(
-        len(points) - 1
-    ):
-
-        p1 = points[i]
-
-        p2 = points[i + 1]
-
-        length = distance_between(
-            p1,
-            p2
-        )
-
-        segments.append(
-
-            {
-
-                "p1": p1,
-
-                "p2": p2,
-
-                "length": length,
-
-                "start":
-                total_length,
-
-                "end":
-                total_length
-                +
-                length
-
-            }
-
-        )
-
-        total_length += length
-
-    if total_length <= 1e-6:
-
-        return []
-
-    tab_positions = []
-
-    for i in range(
-        tab_count
-    ):
-
-        target = (
-            total_length
-            *
-            (
-                i + 1
-            )
-            /
-            (
-                tab_count
-                +
-                1
-            )
-        )
-
-        for seg in segments:
-
-            if (
-
-                seg["start"]
-                <= target
-                <= seg["end"]
-
-            ):
-
-                local_dist = (
-
-                    target
-                    -
-                    seg["start"]
-
+    lines = [
+        f"( G-CODE GENERATED BY CAM ENGINE PRO V4.2 )",
+        f"( DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} )",
+        f"G21 G90 G17 G40 G49 M03 S{spindle}"
+    ]
+    
+    total_depth = sheet_thick + thru_z
+    
+    # Thứ tự công đoạn gia công an toàn: POCKET -> INNER_CUT -> OUTER_CUT
+    for target_op in ["CNC_POCKET", "CNC_INNER_CUT", "CNC_OUTER_CUT"]:
+        lines.append(f"({target_op} OPERATIONS ROUTINE)")
+        
+        for p_data in sheet_data["parts"]:
+            part = p_data["part_ref"]
+            dx, dy, angle = p_data["dx"], p_data["dy"], p_data["angle"]
+            ox = part.get("origin_x", 0.0)
+            oy = part.get("origin_y", 0.0)
+            
+            profiles = []
+            if target_op == "CNC_OUTER_CUT":
+                profiles.append({
+                    "edges": part["outer_edges"], 
+                    "depth": total_depth
+                })
+            else:
+                for feat in part["features"]:
+                    if feat["type"] == target_op:
+                        d = total_depth if target_op == "CNC_INNER_CUT" else feat["depth"]
+                        profiles.append({
+                            "edges": feat["edges"], 
+                            "depth": d
+                        })
+                        
+            for prof in profiles:
+                raw_offset_pts = get_true_offset_toolpath(
+                    prof["edges"], target_op, tool_radius
                 )
-
-                tab_positions.append(
-
-                    interpolate_point(
-
-                        seg["p1"],
-
-                        seg["p2"],
-
-                        local_dist
-
-                    )
-
-                )
-
-                break
-
-    return tab_positions
-
-
-def point_is_near(
-    p1,
-    p2,
-    tolerance
-):
-
-    return (
-
-        distance_between(
-            p1,
-            p2
-        )
-        <=
-        tolerance
-
-    )
-
-
-# ============================================================
-# 15. INDUSTRIAL TOOLPATH
-# ============================================================
-
-def write_industrial_toolpath(
-    gcode_list,
-    pts,
-    total_depth,
-    stepdown,
-    safe_z,
-    feed_rate,
-    has_tabs,
-    ramp_angle
-):
-
-    cleaned = clean_polygon_points(
-        pts
-    )
-
-    if len(cleaned) < 4:
-
-        return
-
-    p1 = cleaned[0]
-
-    p2 = cleaned[1]
-
-    direction = np.array(
-
-        p2
-
-    ) - np.array(
-
-        p1
-
-    )
-
-    direction_length = np.linalg.norm(
-        direction
-    )
-
-    if direction_length <= 1e-6:
-
-        return
-
-    unit_direction = (
-        direction
-        /
-        direction_length
-    )
-
-    ramp_rad = math.radians(
-        ramp_angle
-    )
-
-    if math.tan(
-        ramp_rad
-    ) > 0:
-
-        lead_in_length = (
-
-            stepdown
-            /
-            math.tan(
-                ramp_rad
-            )
-
-        )
-
-    else:
-
-        lead_in_length = 15.0
-
-    lead_in_length = min(
-
-        lead_in_length,
-
-        30.0
-
-    )
-
-    lead_in = (
-
-        np.array(
-            p1
-        )
-        -
-        unit_direction
-        *
-        lead_in_length
-
-    )
-
-    lead_in = (
-
-        float(
-            lead_in[0]
-        ),
-
-        float(
-            lead_in[1]
-        )
-
-    )
-
-    tab_positions = []
-
-    if has_tabs:
-
-        tab_positions = create_tab_positions(
-
-            cleaned,
-
-            tab_count_default
-
-        )
-
-    current_z = 0.0
-
-    while current_z > -total_depth:
-
-        previous_z = current_z
-
-        current_z -= stepdown
-
-        if current_z < -total_depth:
-
-            current_z = -total_depth
-
-        # --------------------------------
-        # RAPID TO LEAD-IN
-        # --------------------------------
-
-        gcode_list.append(
-
-            f"G0 Z{safe_z:.3f}"
-
-        )
-
-        gcode_list.append(
-
-            f"G0 X{lead_in[0]:.3f} "
-            f"Y{lead_in[1]:.3f}"
-
-        )
-
-        # --------------------------------
-        # RAMPING
-        # --------------------------------
-
-        gcode_list.append(
-
-            f"G1 X{p1[0]:.3f} "
-            f"Y{p1[1]:.3f} "
-            f"Z{current_z:.3f} "
-            f"F{feed_rate * 0.5:.0f} "
-            f"; RAMP {ramp_angle} DEG"
-
-        )
-
-        # --------------------------------
-        # TOOLPATH
-        # --------------------------------
-
-        idx = 1
-
-        while idx < len(cleaned):
-
-            pt = cleaned[idx]
-
-            is_tab = False
-
-            if (
-
-                has_tabs
-                and
-                math.isclose(
-
-                    current_z,
-
-                    -total_depth,
-
-                    abs_tol=0.05
-
-                )
-
-            ):
-
-                for tab_point in tab_positions:
-
-                    if point_is_near(
-
-                        pt,
-
-                        tab_point,
-
-                        5.0
-
-                    ):
-
-                        is_tab = True
-
-                        break
-
-            if is_tab:
-
-                tab_z = (
-
-                    current_z
-                    +
-                    tab_thickness
-
-                )
-
-                if tab_z > 0:
-
-                    tab_z = 0
-
-                gcode_list.append(
-
-                    f"G1 Z{tab_z:.3f} "
-                    f"F{feed_rate * 0.4:.0f} "
-                    f"; TAB"
-
-                )
-
-                gcode_list.append(
-
-                    f"G1 X{pt[0]:.3f} "
-                    f"Y{pt[1]:.3f} "
-                    f"F{feed_rate}"
-
-                )
-
-                gcode_list.append(
-
-                    f"G1 Z{current_z:.3f} "
-                    f"F{feed_rate * 0.4:.0f}"
-
-                )
-
-                idx += 1
-
-                continue
-
-            # --------------------------------
-            # ARC FITTING
-            # --------------------------------
-
-            if idx + 1 < len(cleaned):
-
-                arc_lines = fit_arcs_and_emit_gcode(
-
-                    [
-
-                        cleaned[idx - 1],
-
-                        cleaned[idx],
-
-                        cleaned[idx + 1]
-
-                    ],
-
-                    feed_rate
-
-                )
-
-                if any(
-
-                    line.startswith(
-                        "G2"
-                    )
-                    or
-                    line.startswith(
-                        "G3"
-                    )
-
-                    for line in arc_lines
-
-                ):
-
-                    gcode_list.extend(
-                        arc_lines
-                    )
-
-                    idx += 2
-
+                if not raw_offset_pts:
                     continue
-
-            # --------------------------------
-            # LINEAR MOVE
-            # --------------------------------
-
-            gcode_list.append(
-
-                f"G1 X{pt[0]:.3f} "
-                f"Y{pt[1]:.3f} "
-                f"F{feed_rate}"
-
-            )
-
-            idx += 1
-
-        gcode_list.append(
-
-            f"G0 Z{safe_z:.3f}"
-
-        )
+                
+                global_pts = [
+                    transform_point_production(
+                        pt[0], pt[1], dx, dy, angle, ox, oy
+                    ) 
+                    for pt in raw_offset_pts
+                ]
+                
+                z_limit = prof["depth"]
+                z_curr = 0.0
+                start_pt = global_pts[0]
+                
+                lines.append(
+                    f"G0 X{start_pt[0]:.3f} Y{start_pt[1]:.3f} Z{safe_z:.3f}"
+                )
+                
+                while z_curr < z_limit:
+                    z_curr = min(z_curr + stepdown, z_limit)
+                    lines.append(f"G1 Z{-z_curr:.3f} F{feed/2:.0f}")
+                    
+                    contour_lines = fit_arcs_and_emit_gcode(global_pts, feed)
+                    lines.extend(contour_lines)
+                    
+                lines.append(f"G0 Z{safe_z:.3f}")
+                
+    lines.append("M05 M30")
+    return "\n".join(lines)
 
 
 # ============================================================
-# 16. PRODUCTION G-CODE
+# 15. CONTROLLER & USER INTERFACE LOOP
 # ============================================================
-
-def generate_production_atc_gcode(
-
-    sheet_data,
-
-    sheet_th,
-
-    stepdown,
-
-    safe_z,
-
-    overlap,
-
-    dialect,
-
-    ramp_angle
-
-):
-
-    gcode = []
-
-    gcode.append(
-
-        f"; CNC CAM ENGINE PRO V4.2"
-
-    )
-
-    gcode.append(
-
-        f"; MACHINE: {dialect.upper()}"
-
-    )
-
-    gcode.append(
-
-        f"; GENERATED: "
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-
-    )
-
-    gcode.append(
-
-        "G21 ; MM"
-
-    )
-
-    gcode.append(
-
-        "G90 ; ABSOLUTE"
-
-    )
-
-    gcode.append(
-
-        "G17 ; XY PLANE"
-
-    )
-
-    gcode.append(
-
-        f"G0 Z{safe_z:.3f}"
-
-    )
-
-    queue_pockets = []
-
-    queue_inners = []
-
-    queue_outers = []
-
-    for placed in sheet_data["parts"]:
-
-        part = placed[
-            "part_ref"
-        ]
-
-        for feat in part[
-            "features"
-        ]:
-
-            if feat[
-                "type"
-            ] == "CNC_POCKET":
-
-                queue_pockets.append(
-
-                    (
-
-                        part,
-
-                        placed,
-
-                        feat
-
-                    )
-
-                )
-
-            elif feat[
-                "type"
-            ] == "CNC_INNER_CUT":
-
-                queue_inners.append(
-
-                    (
-
-                        part,
-
-                        placed,
-
-                        feat
-
-                    )
-
-                )
-
-        queue_outers.append(
-
-            (
-
-                part,
-
-                placed,
-
-                {
-
-                    "type":
-                    "CNC_OUTER_CUT",
-
-                    "edges":
-                    part[
-                        "outer_edges"
-                    ]
-
-                }
-
-            )
-
-        )
-
-    # ========================================================
-    # TOOL CHANGE
-    # ========================================================
-
-    gcode.append(
-
-        "\n; ===================================="
-
-    )
-
-    gcode.append(
-
-        "; TOOL 1 - CUTTER"
-
-    )
-
-    gcode.append(
-
-        "; ===================================="
-
-    )
-
-    gcode.append(
-
-        "M6 T1"
-
-    )
-
-    gcode.append(
-
-        f"M3 S{int(t1_spindle)}"
-
-    )
-
-    gcode.append(
-
-        f"G0 Z{safe_z:.3f}"
-
-    )
-
-    # ========================================================
-    # POCKET
-    # ========================================================
-
-    if queue_pockets:
-
-        gcode.append(
-
-            "\n; ===================================="
-
-        )
-
-        gcode.append(
-
-            "; OPERATION 1 - POCKET"
-
-        )
-
-        gcode.append(
-
-            "; ===================================="
-
-        )
-
-        for part, placed, feat in queue_pockets:
-
-            toolpath = get_true_offset_toolpath(
-
-                feat["edges"],
-
-                "CNC_POCKET",
-
-                tool_radius
-
-            )
-
-            transformed = [
-
-                transform_point_production(
-
-                    p[0],
-
-                    p[1],
-
-                    placed["dx"],
-
-                    placed["dy"],
-
-                    placed["angle"],
-
-                    placed[
-                        "original_offset"
-                    ][0],
-
-                    placed[
-                        "original_offset"
-                    ][1]
-
-                )
-
-                for p in toolpath
-
-            ]
-
-            write_industrial_toolpath(
-
-                gcode,
-
-                transformed,
-
-                feat["depth"],
-
-                stepdown,
-
-                safe_z,
-
-                t1_feed,
-
-                False,
-
-                ramp_angle
-
-            )
-
-    # ========================================================
-    # INNER CUT
-    # ========================================================
-
-    if queue_inners:
-
-        gcode.append(
-
-            "\n; ===================================="
-
-        )
-
-        gcode.append(
-
-            "; OPERATION 2 - INNER CUT"
-
-        )
-
-        gcode.append(
-
-            "; ===================================="
-
-        )
-
-        for part, placed, feat in queue_inners:
-
-            toolpath = get_true_offset_toolpath(
-
-                feat["edges"],
-
-                "CNC_INNER_CUT",
-
-                tool_radius
-
-            )
-
-            transformed = [
-
-                transform_point_production(
-
-                    p[0],
-
-                    p[1],
-
-                    placed["dx"],
-
-                    placed["dy"],
-
-                    placed["angle"],
-
-                    placed[
-                        "original_offset"
-                    ][0],
-
-                    placed[
-                        "original_offset"
-                    ][1]
-
-                )
-
-                for p in toolpath
-
-            ]
-
-            write_industrial_toolpath(
-
-                gcode,
-
-                transformed,
-
-                sheet_th + overlap,
-
-                stepdown,
-
-                safe_z,
-
-                t1_feed,
-
-                False,
-
-                ramp_angle
-
-            )
-
-    # ========================================================
-    # OUTER CUT
-    # ========================================================
-
-    if queue_outers:
-
-        gcode.append(
-
-            "\n; ===================================="
-
-        )
-
-        gcode.append(
-
-            "; OPERATION 3 - OUTER CUT + TABS"
-
-        )
-
-        gcode.append(
-
-            "; ===================================="
-
-        )
-
-        for part, placed, feat in queue_outers:
-
-            toolpath = get_true_offset_toolpath(
-
-                feat["edges"],
-
-                "CNC_OUTER_CUT",
-
-                tool_radius
-
-            )
-
-            transformed = [
-
-                transform_point_production(
-
-                    p[0],
-
-                    p[1],
-
-                    placed["dx"],
-
-                    placed["dy"],
-
-                    placed["angle"],
-
-                    placed[
-                        "original_offset"
-                    ][0],
-
-                    placed[
-                        "original_offset"
-                    ][1]
-
-                )
-
-                for p in toolpath
-
-            ]
-
-            write_industrial_toolpath(
-
-                gcode,
-
-                transformed,
-
-                sheet_th + overlap,
-
-                stepdown,
-
-                safe_z,
-
-                t1_feed,
-
-                True,
-
-                ramp_angle
-
-            )
-
-    gcode.append(
-
-        "\nM5"
-
-    )
-
-    gcode.append(
-
-        f"G0 Z{safe_z:.3f}"
-
-    )
-
-    gcode.append(
-
-        "M30"
-
-    )
-
-    return "\n".join(
-        gcode
-    )
-
-
-# ============================================================
-# 17. STREAMLIT USER INTERFACE
-# ============================================================
-
-st.markdown("---")
-
-st.subheader(
-
-    "📥 HỆ THỐNG KIỂM ĐỊNH FILE STEP"
-
-)
 
 uploaded_files = st.file_uploader(
-
-    "Nạp file cấu kiện STEP / STP",
-
-    type=[
-
-        "step",
-
-        "stp"
-
-    ],
-
+    "Tải lên các tệp thiết kế mẫu STEP (.step / .stp)", 
+    type=["step", "stp"], 
     accept_multiple_files=True
-
 )
 
-
 if uploaded_files:
-
-    production_db = []
-
-    progress = st.progress(
-        0
-    )
-
-    for idx, uploaded_file in enumerate(
-        uploaded_files
-    ):
-
-        with st.spinner(
-
-            f"Đang phân tích "
-            f"{uploaded_file.name}..."
-
-        ):
-
-            try:
-
-                parsed = process_cad_file_production(
-
-                    uploaded_file.read(),
-
-                    uploaded_file.name,
-
-                    sheet_thickness
-
+    parsed_parts = []
+    progress = st.progress(0.0)
+    
+    for idx, f in enumerate(uploaded_files):
+        try:
+            bytes_data = f.read()
+            part_info = process_cad_file_production(
+                bytes_data, f.name, sheet_thickness
+            )
+            parsed_parts.append(part_info)
+        except Exception as e:
+            st.error(f"Lỗi hệ thống khi đọc cấu trúc tệp {f.name}: {str(e)}")
+        progress.progress((idx + 1) / len(uploaded_files))
+        
+    if parsed_parts:
+        st.success(f"Đã trích xuất hình học thành công {len(parsed_parts)} chi tiết CAD.")
+        
+        df_summary = pd.DataFrame([{
+            "Tên chi tiết": p["name"],
+            "Rộng X (mm)": round(p["width"], 2),
+            "Cao Y (mm)": round(p["height"], 2),
+            "Tính năng phụ": len(p["features"])
+        } for p in parsed_parts])
+        st.dataframe(df_summary, use_container_width=True)
+        
+        with st.spinner("Đang chạy thuật toán sắp xếp ván hình học tối ưu..."):
+            nesting_sheets = execute_production_nesting(
+                parsed_parts, sheet_W, sheet_H, total_offset, margin
+            )
+            
+        st.subheader(f"📊 KẾT QUẢ TỐI ƯU XẾP VÁN ({len(nesting_sheets)} TẤM PHÔI)")
+        
+        for s_idx, sheet in enumerate(nesting_sheets):
+            st.markdown(f"#### 📄 Tấm phôi thứ {sheet['sheet_id']}")
+            
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.set_xlim(-50, sheet_W + 50)
+            ax.set_ylim(-50, sheet_H + 50)
+            ax.set_aspect('equal')
+            
+            ax.add_patch(
+                mpatches.Rectangle(
+                    (0, 0), sheet_W, sheet_H, 
+                    fill=False, edgecolor='black', linewidth=2
                 )
-
-                production_db.append(
-                    parsed
+            )
+            ax.add_patch(
+                mpatches.Rectangle(
+                    (margin, margin), sheet_W - 2*margin, sheet_H - 2*margin, 
+                    fill=False, edgecolor='gray', linestyle='--'
                 )
-
-            except Exception as e:
-
-                st.error(
-
-                    f"Lỗi file "
-                    f"{uploaded_file.name}: "
-                    f"{str(e)}"
-
-                )
-
-        progress.progress(
-
-            (
-                idx + 1
             )
-            /
-            len(
-                uploaded_files
-            )
-
-        )
-
-    if production_db:
-
-        st.success(
-
-            f"Đã phân tích thành công "
-            f"{len(production_db)} chi tiết."
-
-        )
-
-        summary_data = []
-
-        for part in production_db:
-
-            types = [
-
-                feat[
-                    "type"
-                ]
-
-                for feat
-                in part[
-                    "features"
-                ]
-
-            ]
-
-            summary_data.append(
-
-                {
-
-                    "Mã cấu kiện":
-                    part[
-                        "name"
-                    ],
-
-                    "Chiều rộng X":
-                    round(
-                        part[
-                            "width"
-                        ],
-
-                        2
-
-                    ),
-
-                    "Chiều cao Y":
-                    round(
-                        part[
-                            "height"
-                        ],
-
-                        2
-
-                    ),
-
-                    "Pocket":
-                    types.count(
-                        "CNC_POCKET"
-                    ),
-
-                    "Inner Cut":
-                    types.count(
-                        "CNC_INNER_CUT"
-                    ),
-
-                    "Độ dày":
-                    sheet_thickness
-
-                }
-
-            )
-
-        st.dataframe(
-
-            pd.DataFrame(
-                summary_data
-            ),
-
-            use_container_width=True
-
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-
-            "🧩 NESTING VÀ TOOLPATH"
-
-        )
-
-        with st.spinner(
-
-            "Đang tối ưu hóa nesting..."
-
-        ):
-
-            sheets_result = execute_production_nesting(
-
-                production_db,
-
-                sheet_W,
-
-                sheet_H,
-
-                total_offset,
-
-                margin
-
-            )
-
-        st.metric(
-
-            "Tổng số tấm ván",
-
-            len(
-                sheets_result
-            )
-
-        )
-
-        if sheets_result:
-
-            tabs = st.tabs(
-
-                [
-
-                    f"TẤM #{sheet['sheet_id']}"
-
-                    for sheet
-                    in sheets_result
-
-                ]
-
-            )
-
-            for idx, sheet in enumerate(
-                sheets_result
-            ):
-
-                with tabs[idx]:
-
-                    col_graph, col_output = st.columns(
-
-                        [
-
-                            3,
-
-                            2
-
-                        ]
-
+            
+            for p_data in sheet["parts"]:
+                poly = p_data["placed_polygon"]
+                if isinstance(poly, Polygon) and not poly.is_empty:
+                    x, y = poly.exterior.xy
+                    ax.fill(
+                        x, y, alpha=0.4, 
+                        facecolor='#0EA5E9', edgecolor='#0284C7', linewidth=1.5
                     )
-
-                    # ====================================================
-                    # VISUALIZATION
-                    # ====================================================
-
-                    with col_graph:
-
-                        st.markdown(
-
-                            "##### Sơ đồ Nesting"
-
-                        )
-
-                        fig, ax = plt.subplots(
-
-                            figsize=(
-
-                                12,
-
-                                6
-
-                            )
-
-                        )
-
-                        ax.set_xlim(
-
-                            -50,
-
-                            sheet_W + 50
-
-                        )
-
-                        ax.set_ylim(
-
-                            -50,
-
-                            sheet_H + 50
-
-                        )
-
-                        ax.set_aspect(
-                            "equal"
-                        )
-
-                        ax.add_patch(
-
-                            mpatches.Rectangle(
-
-                                (
-
-                                    0,
-
-                                    0
-
-                                ),
-
-                                sheet_W,
-
-                                sheet_H,
-
-                                fill=False,
-
-                                linewidth=2,
-
-                                linestyle="--"
-
-                            )
-
-                        )
-
-                        for placed in sheet[
-                            "parts"
-                        ]:
-
-                            poly = placed[
-                                "placed_polygon"
-                            ]
-
-                            part = placed[
-                                "part_ref"
-                            ]
-
-                            if isinstance(
-
-                                poly,
-
-                                Polygon
-
-                            ):
-
-                                x, y = poly.exterior.xy
-
-                                ax.fill(
-
-                                    x,
-
-                                    y,
-
-                                    alpha=0.5
-
-                                )
-
-                                ax.plot(
-
-                                    x,
-
-                                    y
-
-                                )
-
-                                ax.text(
-
-                                    poly.centroid.x,
-
-                                    poly.centroid.y,
-
-                                    part[
-                                        "name"
-                                    ],
-
-                                    fontsize=8,
-
-                                    ha="center",
-
-                                    va="center"
-
-                                )
-
-                                for feat in part[
-                                    "features"
-                                ]:
-
-                                    feature_points = [
-
-                                        transform_point_production(
-
-                                            p[0],
-
-                                            p[1],
-
-                                            placed[
-                                                "dx"
-                                            ],
-
-                                            placed[
-                                                "dy"
-                                            ],
-
-                                            placed[
-                                                "angle"
-                                            ],
-
-                                            placed[
-                                                "original_offset"
-                                            ][0],
-
-                                            placed[
-                                                "original_offset"
-                                            ][1]
-
-                                        )
-
-                                        for p
-
-                                        in discrete_edges(
-
-                                            feat[
-                                                "edges"
-                                            ]
-
-                                        )
-
-                                    ]
-
-                                    feature_points = clean_polygon_points(
-
-                                        feature_points
-
-                                    )
-
-                                    if len(
-
-                                        feature_points
-
-                                    ) >= 2:
-
-                                        fx, fy = zip(
-
-                                            *feature_points
-
-                                        )
-
-                                        ax.plot(
-
-                                            fx,
-
-                                            fy,
-
-                                            linewidth=1
-
-                                        )
-
-                        st.pyplot(
-                            fig
-                        )
-
-                        plt.close(
-                            fig
-                        )
-
-                    # ====================================================
-                    # OUTPUT
-                    # ====================================================
-
-                    with col_output:
-
-                        st.markdown(
-
-                            "##### 💾 XUẤT FILE CNC"
-
-                        )
-
-                        dxf_data = generate_dxf_industrial_layered(
-
-                            sheet,
-
-                            sheet_W,
-
-                            sheet_H
-
-                        )
-
-                        st.download_button(
-
-                            label=(
-
-                                f"📥 Tải DXF "
-                                f"Tấm #{sheet['sheet_id']}"
-
-                            ),
-
-                            data=dxf_data,
-
-                            file_name=(
-
-                                f"Factory_Sheet_"
-                                f"{sheet['sheet_id']}.dxf"
-
-                            ),
-
-                            mime="image/vnd.dxf",
-
-                            key=(
-
-                                f"dxf_"
-                                f"{sheet['sheet_id']}"
-
-                            )
-
-                        )
-
-                        gcode_data = generate_production_atc_gcode(
-
-                            sheet,
-
-                            sheet_thickness,
-
-                            max_stepdown,
-
-                            safe_Z,
-
-                            thru_overlap,
-
-                            cnc_dialect,
-
-                            ramp_angle
-
-                        )
-
-                        st.download_button(
-
-                            label=(
-
-                                f"📟 Tải G-code "
-                                f"Tấm #{sheet['sheet_id']}"
-
-                            ),
-
-                            data=gcode_data,
-
-                            file_name=(
-
-                                f"ATC_Sheet_"
-                                f"{sheet['sheet_id']}.nc"
-
-                            ),
-
-                            mime="text/plain",
-
-                            key=(
-
-                                f"gcode_"
-                                f"{sheet['sheet_id']}"
-
-                            )
-
-                        )
-
-                        with st.expander(
-
-                            "Xem trước G-code"
-
-                        ):
-
-                            st.code(
-
-                                gcode_data[
-                                    :3000
-                                ],
-
-                                language="gcode"
-
-                            )
-
-else:
-
-    st.info(
-
-        "💡 Vui lòng tải file STEP/STP để bắt đầu."
-
-    )
+                    ax.text(
+                        poly.centroid.x, poly.centroid.y, 
+                        p_data["part_ref"]["name"], 
+                        fontsize=8, ha='center', va='center'
+                    )
+                    
+            st.pyplot(fig)
+            
+            col1, col2 = st.columns(2)
+            
+            gcode_str = generate_sheet_gcode(
+                sheet, sheet_thickness, safe_Z, thru_overlap, 
+                max_stepdown, t1_feed, t1_spindle, cnc_dialect
+            )
+            col1.download_button(
+                label=f"💾 Tải ATC G-Code Tấm {sheet['sheet_id']}",
+                data=gcode_str,
+                file_name=f"CAM_Engine_Sheet_{sheet['sheet_id']}.nc",
+                mime="text/plain"
+            )
+            
+            dxf_str = generate_dxf_industrial_layered(
+                sheet, sheet_W, sheet_H
+            )
+            col2.download_button(
+                label=f"📐 Tải Bản Vẽ DXF Layer Tấm {sheet['sheet_id']}",
+                data=dxf_str,
+                file_name=f"CAM_Engine_Sheet_{sheet['sheet_id']}.dxf",
+                mime="image/vnd.dxf"
+            )
